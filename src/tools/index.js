@@ -19,6 +19,12 @@ const INTERVAL = z.enum(['1d', '1w']).describe('Trend interval: 1d (daily) or 1w
 // universe into the model's context (token cost). Callers raise/lower via `top`.
 const DEFAULT_LIST_CAP = 50;
 
+export const FUNDING_MOMENTUM_DESCRIPTION =
+  'Perpetual funding-rate positioning context, market-wide or for one symbol. APR is already in percent units (1.7 = 1.7%). Positive funding means longs pay and shorts receive; negative funding means shorts pay and longs receive. Funding is context only, not a standalone directional, timing, or entry signal.';
+
+export const COIN_RISK_DESCRIPTION =
+  'Bundled risk context for one or more coins: price, funding APR, deterministic funding_paying_side, funding_receiving_side, carry_if_long and carry_if_short fields, daily/weekly trend, sentiment stance, and BTC correlation. Funding applies to perpetual positions only; spot positions neither pay nor receive it. Relay the carry fields exactly rather than inferring direction from crowding. The best single tool for "should I be worried about X".';
+
 // Permissive shared output schema. The server's `{ data, meta }` envelope is
 // always a JSON object, so this validates while we leave the inner data shape
 // open. Per-tool tightening is a fast-follow once we capture live payloads.
@@ -191,8 +197,7 @@ export const TYPED_TOOLS = [
   {
     name: 'get_funding_momentum',
     title: 'Funding momentum',
-    description:
-      'Perpetual funding-rate momentum, market-wide or for one symbol. APR is in percent units (1.7 = 1.7%); tier is cool/neutral/warm/hot.',
+    description: FUNDING_MOMENTUM_DESCRIPTION,
     inputSchema: { symbol: z.string().optional().describe('Restrict to one symbol, e.g. BTC. Omit for the market-wide view.') },
     build: ({ symbol }) => ({ route: 'funding/momentum', query: { symbol } }),
   },
@@ -301,14 +306,23 @@ function registerTyped(server, def) {
   );
 }
 
+export function buildRiskRows(envs) {
+  return envs.map(({ s, env, err }) => {
+    if (err) return { symbol: s.toUpperCase(), error: err.message };
+    // Server may nest as { data: {...} } inside the envelope's data. Return the
+    // contract unchanged so external host models receive deterministic carry.
+    const data = unwrap(env)?.data ?? unwrap(env);
+    return data ?? { symbol: s.toUpperCase(), error: 'no data' };
+  });
+}
+
 /** Register `get_coin_risk` (special: fans out one request per symbol). */
 function registerCoinRisk(server) {
   server.registerTool(
     'get_coin_risk',
     {
       title: 'Coin risk context',
-      description:
-        'Bundled risk context for one or more coins: price, funding APR, daily/weekly trend, sentiment stance, and BTC correlation. The best single tool for "should I be worried about X".',
+      description: COIN_RISK_DESCRIPTION,
       inputSchema: {
         symbols: z.array(z.string().min(1)).min(1).max(15).describe('One or more coin symbols, e.g. ["BTC","ETH","SOL"].'),
       },
@@ -321,12 +335,7 @@ function registerCoinRisk(server) {
           symbols.map((s) => apiGet(`coin/risk/${encodeURIComponent(s)}`).then((env) => ({ s, env })).catch((err) => ({ s, err }))),
         );
         if (envs.every((r) => r.err)) return toMcpError(envs[0].err);
-        const rows = envs.map(({ s, env, err }) => {
-          if (err) return { symbol: s.toUpperCase(), error: err.message };
-          // server may nest as { data: {...} } inside the envelope's data
-          const d = unwrap(env)?.data ?? unwrap(env);
-          return d ?? { symbol: s.toUpperCase(), error: 'no data' };
-        });
+        const rows = buildRiskRows(envs);
         const ok = rows.filter((r) => !r.error);
         const summary = `Risk context for ${rows.length} coin(s)${ok.length < rows.length ? ` (${rows.length - ok.length} unavailable)` : ''}.`;
         return result(rows.length === 1 ? rows[0] : rows, { summary });

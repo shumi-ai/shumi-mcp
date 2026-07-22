@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TYPED_TOOLS, toolCatalog } from '../src/tools/index.js';
+import {
+  COIN_RISK_DESCRIPTION,
+  FUNDING_MOMENTUM_DESCRIPTION,
+  TYPED_TOOLS,
+  buildRiskRows,
+  toolCatalog,
+} from '../src/tools/index.js';
 import { applyFilters, unwrap } from '../src/tools/util.js';
 
 function byName(name) {
@@ -28,6 +34,33 @@ test('lookup_coin requires chain for contract lookups', () => {
 test('scan_trends maps state -> action', () => {
   const t = byName('scan_trends');
   assert.deepEqual(t.build({ state: 'aligned', limit: 5 }), { route: 'trends', query: { action: 'aligned', interval: undefined, limit: 5 } });
+});
+
+test('funding momentum defines units, payer direction, and context-only use', () => {
+  const tool = byName('get_funding_momentum');
+  assert.equal(tool.description, FUNDING_MOMENTUM_DESCRIPTION);
+  assert.match(tool.description, /1\.7 = 1\.7%/);
+  assert.match(tool.description, /Positive funding means longs pay and shorts receive/);
+  assert.match(tool.description, /negative funding means shorts pay and longs receive/i);
+  assert.match(tool.description, /not a standalone directional, timing, or entry signal/);
+});
+
+test('coin risk contract tells host models to relay deterministic carry', () => {
+  assert.match(COIN_RISK_DESCRIPTION, /funding_paying_side/);
+  assert.match(COIN_RISK_DESCRIPTION, /carry_if_long and carry_if_short/);
+  assert.match(COIN_RISK_DESCRIPTION, /spot positions neither pay nor receive/);
+  assert.match(COIN_RISK_DESCRIPTION, /Relay the carry fields exactly/);
+
+  const contract = {
+    symbol: 'BTC',
+    funding_apr: 7.43505,
+    funding_apr_unit: 'percent',
+    funding_paying_side: 'longs',
+    funding_receiving_side: 'shorts',
+    carry_if_long: 'Long perpetual positions pay funding at +7.4% APR.',
+    carry_if_short: 'Short perpetual positions receive funding at +7.4% APR.',
+  };
+  assert.deepEqual(buildRiskRows([{ s: 'BTC', env: { data: contract } }]), [contract]);
 });
 
 test('get_regime switches to history when symbol provided', () => {
