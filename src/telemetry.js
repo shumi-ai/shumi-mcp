@@ -66,7 +66,10 @@ export function capture(event, properties = {}) {
     client.capture({
       distinctId: distinctId(),
       event,
-      properties: { source: 'mcp', transport: transportLabel, ...properties },
+      // `surface` is the canonical cross-surface tag (all Shumi surfaces share
+      // one PostHog project + key). Kept in sync with coinrotator/shumi-landing
+      // (web) and coinrotator-ai ('api'/'cli').
+      properties: { surface: 'mcp', transport: transportLabel, ...properties },
     });
   } catch {
     /* never throw from telemetry */
@@ -76,7 +79,7 @@ export function capture(event, properties = {}) {
 export function captureError(error, properties = {}) {
   if (!enabled || !client) return;
   try {
-    client.captureException(error, distinctId(), { source: 'mcp', transport: transportLabel, ...properties });
+    client.captureException(error, distinctId(), { surface: 'mcp', transport: transportLabel, ...properties });
   } catch {
     /* never throw from telemetry */
   }
