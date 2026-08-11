@@ -5,7 +5,8 @@ market intelligence the [`shumi` CLI](https://www.npmjs.com/package/shumi) provi
 client (Claude Desktop, Claude Code, Cursor, agents).
 
 It's a thin wrapper over Shumi's data API: prices, trends, funding rates, sentiment, narratives,
-market regime, synthesized signals, and pair / delta-neutral ideas. All tools are read-only.
+market regime, synthesized signals, pair / delta-neutral ideas, real-world assets, holder and
+wallet tracking, and transcript highlights. All tools are read-only.
 
 ## Quick start
 
@@ -39,10 +40,16 @@ appear automatically.
 ## Tools
 
 **Typed (deterministic):** `get_coin_risk`, `lookup_coin`, `resolve_coin`, `get_coin_sentiment`,
-`get_coin_historical`, `get_market_health`, `get_global_market`, `get_prices`, `scan_trends`,
-`scan_coins`, `get_market_sentiment`, `list_narratives`, `get_narrative`, `list_categories`,
-`get_category`, `get_funding_momentum`, `get_funding_alerts`, `get_regime`, `get_signal`,
-`get_signal_quality`, `get_pair_suggestions`.
+`get_coin_historical`, `get_market_health`, `get_market_crossing`, `get_global_market`,
+`get_prices`, `scan_trends`, `scan_coins`, `get_market_sentiment`, `list_narratives`,
+`get_narrative`, `list_categories`, `get_category`, `get_funding_momentum`, `get_funding_alerts`,
+`get_regime`, `get_signal`, `get_signal_quality`, `get_pair_suggestions`, `list_rwa_assets`,
+`get_rwa_asset`, `get_holders`, `get_wallets`, `get_futures_signals`, `get_basket`,
+`get_transcripts`.
+
+**Real-world assets** (`list_rwa_assets`, `get_rwa_asset`) cover stocks, ETFs, commodities,
+indices and FX trading as perps on Hyperliquid builder DEXes. They are not crypto tokens — the
+coin tools will not find them.
 
 **Free-form:** `ask_shumi` (natural-language questions — Shumi classifies, fetches, and synthesizes)
 and `search_web`.
