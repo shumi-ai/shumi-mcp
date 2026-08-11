@@ -83,6 +83,42 @@ test('get_category builds nested route', () => {
   assert.deepEqual(t.build({ name: 'Layer 2', view: 'coins' }), { route: 'category/coins/Layer%202' });
 });
 
+test('get_rwa_asset routes by ticker or namespaced id', () => {
+  const t = byName('get_rwa_asset');
+  assert.deepEqual(t.build({ by: 'symbol', identifier: 'AAPL' }), { route: 'rwa/symbol/AAPL' });
+  // The colon in a namespaced id must survive as %3A, not split the path.
+  assert.deepEqual(t.build({ by: 'id', identifier: 'xyz:AAPL' }), { route: 'rwa/asset/xyz%3AAAPL' });
+});
+
+test('list_rwa_assets passes class and dex filters through to the server', () => {
+  const t = byName('list_rwa_assets');
+  assert.deepEqual(t.build({ type: 'commodity', dex: 'xyz', top: 50 }), {
+    route: 'rwa/assets',
+    query: { type: 'commodity', dex: 'xyz', top: 50 },
+  });
+});
+
+test('movement/history views require their identifier', () => {
+  assert.throws(() => byName('get_holders').build({ view: 'movements' }), /contract is required/);
+  assert.throws(() => byName('get_wallets').build({ view: 'movements' }), /address is required/);
+  assert.throws(() => byName('get_futures_signals').build({ view: 'history' }), /asset is required/);
+});
+
+test('view params map to the server action param', () => {
+  assert.deepEqual(byName('get_holders').build({ view: 'watchlist' }), {
+    route: 'holders',
+    query: { action: 'watchlist', contract: undefined, limit: undefined },
+  });
+  assert.deepEqual(byName('get_transcripts').build({ view: 'sources' }), {
+    route: 'transcripts',
+    query: { action: 'sources' },
+  });
+});
+
+test('walkforward is deliberately absent while Engine B is paused', () => {
+  assert.equal(TYPED_TOOLS.find((t) => t.name.includes('walkforward')), undefined);
+});
+
 test('every typed tool has a description and a build fn', () => {
   for (const t of TYPED_TOOLS) {
     assert.ok(typeof t.description === 'string' && t.description.length > 10, `${t.name} description`);

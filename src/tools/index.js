@@ -104,6 +104,14 @@ export const TYPED_TOOLS = [
     build: () => ({ route: 'market/global' }),
   },
   {
+    name: 'get_market_crossing',
+    title: 'Market trend crossing',
+    description:
+      'The most recent regime crossing — when one trend cohort (UP/HODL/DOWN) overtook another market-wide. Answers "has the market flipped?". Returns an empty `crossings` array plus a message when no crossing has fired.',
+    inputSchema: {},
+    build: () => ({ route: 'market/crossing' }),
+  },
+  {
     name: 'get_prices',
     title: 'Bulk live prices',
     description: 'Bulk live prices, optionally with 4h/24h/7d baseline overlays. Omit symbols for the full tracked set.',
@@ -267,6 +275,113 @@ export const TYPED_TOOLS = [
       };
     },
   },
+  {
+    name: 'list_rwa_assets',
+    title: 'List real-world assets',
+    description:
+      'List the tradable real-world assets — stocks and ETFs (AAPL, NVDA, SPY), metals and commodities (GOLD, SILVER, BRENT), stock indices (SP500, JP225) and FX. These trade as perps on Hyperliquid builder DEXes and are NOT crypto tokens; the crypto tools will not find them. Use this to answer "which stocks/commodities can I look at?".',
+    inputSchema: {
+      type: z.enum(['equity', 'etf', 'commodity', 'index', 'fx']).optional().describe('Filter by asset class.'),
+      dex: z.string().optional().describe('Filter by builder-DEX slug, e.g. "xyz".'),
+      top: z.number().int().positive().max(1000).optional().describe('Max assets to return (server default 200; the full universe is ~94).'),
+    },
+    // Deliberately no listFilters: the RWA universe is ~94 metadata-only rows, and the
+    // shared 50-item default cap would silently hide a third of it from "what's available".
+    build: ({ type, dex, top }) => ({ route: 'rwa/assets', query: { type, dex, top } }),
+  },
+  {
+    name: 'get_rwa_asset',
+    title: 'Real-world asset detail',
+    description:
+      'Price, daily/weekly trend and perp funding for one real-world asset (stock, ETF, commodity, index, FX). Look up by ticker (AAPL, GOLD) or by namespaced id (xyz:AAPL). Funding belongs to the PERPETUAL CONTRACT, not the underlying — `funding.apr` is the annualized rate in percent, `funding.rate` is the raw per-hour fraction. Do not use the crypto coin tools for these.',
+    inputSchema: {
+      by: z.enum(['symbol', 'id']).default('symbol').describe('How `identifier` is interpreted.'),
+      identifier: z.string().min(1).describe('Ticker (AAPL, GOLD, SP500) or namespaced id (xyz:AAPL).'),
+    },
+    build: ({ by, identifier }) => {
+      const id = encodeURIComponent(identifier);
+      return { route: by === 'id' ? `rwa/asset/${id}` : `rwa/symbol/${id}` };
+    },
+  },
+  {
+    name: 'get_holders',
+    title: 'Token holder tracking',
+    description:
+      'Tracked token-holder cohorts. view=watchlist (which token contracts are tracked), movements (recent holder-count changes for one contract). Answers "is the holder base growing or bleeding?".',
+    inputSchema: {
+      view: z.enum(['watchlist', 'movements']).default('watchlist').describe('Which holder view to return.'),
+      contract: z.string().optional().describe('Token contract address. Required when view="movements".'),
+      limit: z.number().int().positive().max(200).optional().describe('Max results.'),
+    },
+    listFilters: true,
+    build: ({ view, contract, limit }) => {
+      if (view === 'movements' && !contract) {
+        throw new ApiError(400, { error: { code: 'BAD_REQUEST', message: 'contract is required when view="movements".' } });
+      }
+      return { route: 'holders', query: { action: view, contract, limit } };
+    },
+  },
+  {
+    name: 'get_wallets',
+    title: 'Wallet tracking',
+    description:
+      'Tracked wallets. view=watchlist (which wallets are tracked), movements (recent balance changes for one wallet address). Answers "what did this wallet do recently?".',
+    inputSchema: {
+      view: z.enum(['watchlist', 'movements']).default('watchlist').describe('Which wallet view to return.'),
+      address: z.string().optional().describe('Wallet address. Required when view="movements".'),
+      limit: z.number().int().positive().max(200).optional().describe('Max results.'),
+    },
+    listFilters: true,
+    build: ({ view, address, limit }) => {
+      if (view === 'movements' && !address) {
+        throw new ApiError(400, { error: { code: 'BAD_REQUEST', message: 'address is required when view="movements".' } });
+      }
+      return { route: 'wallets', query: { action: view, address, limit } };
+    },
+  },
+  {
+    name: 'get_futures_signals',
+    title: 'Futures signals',
+    description:
+      'Perpetual-futures signal engine. view=state (currently open signals), log (recent fires), history (one asset\'s past signals — needs asset).',
+    inputSchema: {
+      view: z.enum(['state', 'log', 'history']).default('state').describe('Which futures view to return.'),
+      asset: z.string().optional().describe('Asset symbol, e.g. BTC. Required when view="history".'),
+    },
+    listFilters: true,
+    build: ({ view, asset }) => {
+      if (view === 'history' && !asset) {
+        throw new ApiError(400, { error: { code: 'BAD_REQUEST', message: 'asset is required when view="history".' } });
+      }
+      return { route: 'futures', query: { action: view, asset } };
+    },
+  },
+  {
+    name: 'get_basket',
+    title: 'Basket snapshots',
+    description: 'Daily snapshots of the tracked basket — composition and performance over time.',
+    inputSchema: {},
+    listFilters: true,
+    build: () => ({ route: 'basket' }),
+  },
+  {
+    name: 'get_transcripts',
+    title: 'Transcript highlights',
+    description:
+      'Highlights mined from tracked video/podcast transcripts. view=highlights (extracted claims with the coins, sectors and macro tags they mention), sources (which channels are tracked). Answers "what are people actually saying about X?".',
+    inputSchema: {
+      view: z.enum(['highlights', 'sources']).default('highlights').describe('Which transcript view to return.'),
+    },
+    listFilters: true,
+    build: ({ view }) => ({ route: 'transcripts', query: { action: view } }),
+  },
+  // NOT exposed: /api/cli/walkforward. The route exists and the CLI ships all three of its
+  // actions, but two of them have nothing behind them — TrendPositions is empty and
+  // TrendOutcomes holds a single row from 2026-05-28 — because Engine B is paused. Only
+  // `signals` returns anything, and thinly (10 rows in the last 7 days). Add the tool when the
+  // engine resumes; shipping it now would hand a paying caller an empty array with no reason.
+  //
+  // NOT exposed: /api/cli/watch/:stream. It is SSE, which does not fit MCP tool semantics.
 ];
 
 /** Register one typed tool. */
