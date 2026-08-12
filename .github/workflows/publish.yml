@@ -67,7 +67,18 @@ jobs:
     runs-on: ubuntu-latest
     # Second gate. Add required reviewers to this environment in repo settings and
     # the job waits for a human even after the merge.
-    environment: publish
+    #
+    # The name must match the environment holding MCP_DNS_PRIVATE_KEY exactly —
+    # environment secrets are visible only to jobs that declare that environment,
+    # and a mismatch reads as a missing secret rather than a naming error. It must
+    # also match the Environment name on the npm Trusted Publisher entry, if set.
+    #
+    # PUBLISH_ENABLED is deliberately NOT an environment variable. The job-level
+    # `if` below is evaluated before the environment is resolved, so `vars` holds
+    # only repository and organization variables at that point. An environment
+    # variable there is empty, the condition is never true, and the job silently
+    # never runs.
+    environment: Live
     permissions:
       contents: read
       # Lets the runner mint the OIDC token npm exchanges for publish rights.
