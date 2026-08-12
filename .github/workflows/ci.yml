@@ -19,3 +19,49 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  # test/version.test.js pins the four in-repo version strings to each other. It cannot see the
+  # registry, and the registry is where the drift actually hurt: 0.1.0 sat on npm for a day
+  # carrying a README whose tool list contradicted its own "not included" section, because npm
+  # only refreshes a README on publish. Nothing in the repo was wrong, so nothing failed.
+  #
+  # Only one direction is unambiguously broken, and that is the one this fails on: the repo
+  # BEHIND the registry means a publish happened from something that was never committed, so the
+  # tag, the README on npmjs.com and the source no longer describe the same build.
+  #
+  # The repo AHEAD is the normal state between merging a release commit and running npm publish,
+  # so it is a notice rather than a failure — but it is a notice on main, where somebody is
+  # looking, not a scheduled job whose log nobody opens.
+  registry-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Repo version against npm latest
+        run: |
+          REPO=$(node -p "require('./package.json').version")
+          NAME=$(node -p "require('./package.json').name")
+          NPM=$(npm view "$NAME" version 2>/dev/null || echo "")
+
+          if [ -z "$NPM" ]; then
+            echo "::notice::$NAME is not published yet; nothing to compare against."
+            exit 0
+          fi
+
+          echo "repo: $REPO   npm: $NPM"
+          [ "$REPO" = "$NPM" ] && { echo "in sync"; exit 0; }
+
+          # Lowest of the two. If that is the repo, the registry is ahead of the source.
+          LOWER=$(printf '%s\n%s\n' "$REPO" "$NPM" | sort -V | head -1)
+
+          if [ "$LOWER" = "$REPO" ]; then
+            echo "::error::npm has $NPM but this repo says $REPO."
+            echo "Something was published that is not committed here, so the source, the git tag"
+            echo "and the README on npmjs.com no longer describe the same build."
+            exit 1
+          fi
+
+          echo "::notice::Release $REPO is committed but npm is still on $NPM — run npm publish."
