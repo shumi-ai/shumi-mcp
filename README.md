@@ -91,7 +91,14 @@ npm run inspect         # open the MCP Inspector against the stdio server
 SHUMI_TOKEN=… npm start # run the stdio server
 ```
 
-## Not included in v1
+## Deliberately not exposed
 
-`holders` / `wallets` movement tracking, transcripts, walkforward, futures, basket, and live
-streaming (`watch`). These are available in the CLI today; open an issue if you need them via MCP.
+Two CLI routes have no MCP tool, both on purpose:
+
+- **`walkforward`** — the route exists, but two of its three actions have nothing behind them
+  while Engine B is paused: positions is empty and outcomes holds a single row from 2026-05-28.
+  Shipping it would hand a caller an empty array with no reason attached. It goes in when the
+  engine resumes.
+- **`watch`** — server-sent events, which do not fit MCP tool semantics.
+
+Everything else in the CLI's typed surface has a tool.
