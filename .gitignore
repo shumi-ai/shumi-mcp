@@ -4,3 +4,8 @@ node_modules/
 .env
 .env.*
 dist/
+mcp-publisher.exe
+mcp-registry-key.hex
+mcp-registry-key.jwk.json
+mcp-registry-auth
+key.pem
