@@ -26,3 +26,11 @@ test('every declared version matches package.json', () => {
 test('server.json points at the package we actually publish', () => {
   assert.equal(read('server.json').packages[0].identifier, read('package.json').name);
 });
+
+test('the version announced in the MCP handshake matches the package', async () => {
+  // Not covered by the file comparison above: SERVER_VERSION used to be a literal
+  // in src/server.js, and the deployed server announced 0.1.0 while the package
+  // was on 0.1.2. This is the version a user quotes in a bug report.
+  const { SERVER_VERSION } = await import('../src/server.js');
+  assert.equal(SERVER_VERSION, read('package.json').version);
+});

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiGet } from './http-client.js';
 import { errorPayload } from './errorMap.js';
@@ -5,7 +6,16 @@ import { registerTools, toolCatalog } from './tools/index.js';
 import { instrumentToolCalls } from './telemetry.js';
 
 export const SERVER_NAME = 'shumi';
-export const SERVER_VERSION = '0.1.0';
+
+// Read rather than hardcode. This constant is what every client sees in the
+// initialize handshake, and as a literal it went stale immediately: the live
+// server was still announcing 0.1.0 while the package was on 0.1.2. It is the
+// version a user would quote in a bug report, so it is the worst of the five
+// places to let drift. npm always ships package.json in the tarball, so this
+// resolves for an installed package as well as from a checkout.
+export const SERVER_VERSION = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).version;
 
 /**
  * Build a fully-configured Shumi MCP server. Transport-agnostic: the same

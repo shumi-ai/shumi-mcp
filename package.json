@@ -1,6 +1,6 @@
 {
   "name": "@shumi-ai/mcp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Shumi crypto trade-intelligence MCP server — the market intelligence the shumi CLI provides, for any MCP client.",
   "type": "module",
   "author": "pxeodev",
