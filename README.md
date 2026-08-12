@@ -37,6 +37,17 @@ appear automatically.
 
 `~/.cursor/mcp.json` uses the same `command` / `args` / `env` shape as above.
 
+### Plugin directories
+
+This repo also ships `plugin.json` and `mcp.json` at its root, so it installs as an
+[Agent Plugin](https://agent-plugins.org) from Cursor's directory and any other client on that
+standard.
+
+Set `SHUMI_TOKEN` in your environment before starting the client when you install this way. The
+Agent Plugins schema takes literal environment values only — it has no placeholder for a secret —
+so the manifest deliberately omits `env` rather than shipping a `${SHUMI_TOKEN}` string that would
+be passed through verbatim and fail as an invalid key.
+
 ## Tools
 
 **Typed (deterministic):** `get_coin_risk`, `lookup_coin`, `resolve_coin`, `get_coin_sentiment`,

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "shumi",
+  "version": "0.1.0",
+  "description": "Crypto trade intelligence: prices, trends, funding rates, sentiment, narratives, market regime, signals, pair and delta-neutral ideas, real-world assets, and holder tracking.",
+  "author": {
+    "name": "Shumi",
+    "url": "https://shumi.ai"
+  },
+  "homepage": "https://docs.shumi.ai/agents/mcp",
+  "repository": "https://github.com/mayrsascha/shumi-mcp",
+  "license": "MIT",
+  "keywords": [
+    "crypto",
+    "trading",
+    "market-data",
+    "sentiment",
+    "funding-rates",
+    "defi"
+  ]
+}
