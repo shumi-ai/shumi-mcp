@@ -1,0 +1,108 @@
+name: Publish
+
+# Merging a version bump to main is the publish action.
+#
+# The job is a no-op unless package.json's version differs from what is already
+# on npm, so ordinary merges to main do nothing. To release: bump the version in
+# package.json AND server.json (both places), open a PR, merge it.
+#
+# Approving that PR is therefore approving the release. A second gate sits on the
+# `publish` environment — add required reviewers to it in repo settings and the
+# job will wait for a human even after the merge.
+#
+# Publication is not reversible. npm allows unpublish for 72 hours and then the
+# name and version are permanent; the MCP registry entry propagates to Smithery,
+# Glama and MCPfinder within about 24 hours.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      should-publish: ${{ steps.compare.outputs.changed }}
+      version: ${{ steps.compare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versions in package.json and server.json must agree
+        run: |
+          PKG=$(jq -r .version package.json)
+          SRV=$(jq -r .version server.json)
+          SRV_PKG=$(jq -r '.packages[0].version' server.json)
+          echo "package.json=$PKG server.json=$SRV server.json/packages[0]=$SRV_PKG"
+          if [ "$PKG" != "$SRV" ] || [ "$PKG" != "$SRV_PKG" ]; then
+            echo "::error::version mismatch — bump package.json, server.json (.version) and server.json (.packages[0].version) together"
+            exit 1
+          fi
+
+      - name: Is this version already on npm?
+        id: compare
+        run: |
+          NAME=$(jq -r .name package.json)
+          LOCAL=$(jq -r .version package.json)
+          # `npm view` exits non-zero for a package that has never been published.
+          REMOTE=$(npm view "$NAME" version 2>/dev/null || echo "none")
+          echo "local=$LOCAL remote=$REMOTE"
+          echo "version=$LOCAL" >> "$GITHUB_OUTPUT"
+          if [ "$LOCAL" = "$REMOTE" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "$NAME@$LOCAL already published — nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Will publish $NAME@$LOCAL (npm currently has: $REMOTE)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  publish:
+    needs: check
+    # PUBLISH_ENABLED is an explicit off switch and it defaults to off: an unset
+    # repo variable is an empty string, so this job does nothing until someone
+    # sets it to 'true' in Settings → Secrets and variables → Actions → Variables.
+    # Without it, merging this workflow would publish on the very next push to
+    # main, and a GitHub environment with no reviewers configured is not a gate.
+    if: needs.check.outputs.should-publish == 'true' && vars.PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    # Second gate. Add required reviewers to this environment in repo settings and
+    # the job waits for a human even after the merge.
+    environment: publish
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+      - run: npm test
+
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Authenticate to the MCP Registry
+        # DNS auth, not github-oidc: the server is named `ai.shumi/mcp`, and OIDC
+        # only grants the `io.github.*` namespace. Requires an apex TXT record on
+        # shumi.ai — see PUBLISHING.md.
+        run: ./mcp-publisher login dns --domain=shumi.ai --private-key="$MCP_DNS_PRIVATE_KEY"
+        env:
+          MCP_DNS_PRIVATE_KEY: ${{ secrets.MCP_DNS_PRIVATE_KEY }}
+
+      - name: Publish to the MCP Registry
+        run: ./mcp-publisher publish
+
+      - name: Summary
+        run: |
+          echo "Published \`$(jq -r .name package.json)@${{ needs.check.outputs.version }}\` to npm and \`$(jq -r .name server.json)\` to the MCP Registry." >> "$GITHUB_STEP_SUMMARY"
+          echo "Smithery, Glama and MCPfinder aggregate from the registry within ~24h." >> "$GITHUB_STEP_SUMMARY"
