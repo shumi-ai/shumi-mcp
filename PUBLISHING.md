@@ -11,10 +11,17 @@ threads through npm, `server.json`, and the registry.
 > what the workflow does and as the fallback if it is disabled.
 >
 > **One-time setup before it can run** (none of it is automatable — all three are
-> credential or DNS actions):
+> account or DNS actions):
 >
-> 1. Repo secret `NPM_TOKEN` — an automation token with publish rights on the
->    `@shumi-ai` npm org.
+> 1. **npm Trusted Publisher** — on npmjs.com, open `@shumi-ai/mcp` → Settings →
+>    Trusted Publishers, and add: owner `mayrsascha`, repository `shumi-mcp`,
+>    workflow `publish.yml`. **There is no `NPM_TOKEN`.** The runner exchanges its
+>    OIDC token for short-lived publish rights, so nothing long-lived exists to
+>    leak, rotate, or expire — and npm is actively restricting the 2FA-bypass
+>    tokens this replaces. Two consequences worth knowing: the workflow *filename*
+>    is part of the trust relationship, so renaming `publish.yml` breaks
+>    publishing until the entry is updated; and setting `NODE_AUTH_TOKEN` would
+>    silently disable OIDC, because npm prefers a token when one is present.
 > 2. Repo secret `MCP_DNS_PRIVATE_KEY` — the Ed25519 private key (64-char hex)
 >    whose public half is published as an **apex** TXT record on `shumi.ai`:
 >    `shumi.ai. IN TXT "v=MCPv1; k=ed25519; p=<PUBLIC_KEY>"`. It must be on the
@@ -22,6 +29,10 @@ threads through npm, `server.json`, and the registry.
 >    or verification fails. Generation commands are in step 3.
 > 3. Repo variable `PUBLISH_ENABLED=true` — the off switch. It defaults to off,
 >    so merging the workflow alone publishes nothing.
+>
+> These belong in **GitHub** → Settings → Secrets and variables → Actions. They
+> are read by a GitHub Action; putting them in a hosting provider's environment
+> does nothing, because the workflow cannot see it.
 >
 > Optionally add required reviewers to the `publish` environment for a second
 > gate that fires after the merge.
