@@ -5,6 +5,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { createShumiServer } from './server.js';
 import { runWithRequest } from './request-context.js';
 import { initTelemetry, shutdownTelemetry } from './telemetry.js';
+import { SessionStore, DEFAULT_TTL_MS, DEFAULT_MAX_SESSIONS, DEFAULT_SWEEP_MS } from './session-store.js';
 
 // Initialize PostHog once for the lifetime of the HTTP server (multi-tenant:
 // each request is attributed to its own bearer token inside the tool handler).
@@ -42,8 +43,13 @@ function protectedResourceMetadata() {
   return { resource: `${PUBLIC_URL}${MCP_PATH}`, authorization_servers: [AUTH_SERVER] };
 }
 
-/** sessionId -> transport */
-const transports = new Map();
+// Bounded sessionId -> transport store. Idle sessions are reaped on a timer so
+// liveness probes that `initialize` but never DELETE cannot leak the heap to an
+// OOM (see session-store.js). Tunables via env, sensible defaults otherwise.
+const SESSION_TTL_MS = Number(process.env.SHUMI_MCP_SESSION_TTL_MS) || DEFAULT_TTL_MS;
+const MAX_SESSIONS = Number(process.env.SHUMI_MCP_MAX_SESSIONS) || DEFAULT_MAX_SESSIONS;
+const SESSION_SWEEP_MS = Number(process.env.SHUMI_MCP_SESSION_SWEEP_MS) || DEFAULT_SWEEP_MS;
+const transports = new SessionStore({ ttlMs: SESSION_TTL_MS, maxSessions: MAX_SESSIONS });
 
 function originAllowed(origin) {
   if (!origin) return true; // non-browser clients omit Origin (DNS-rebinding N/A)
@@ -181,9 +187,15 @@ server.listen(PORT, () => {
   process.stderr.write(`shumi-mcp: Streamable HTTP server on http://localhost:${PORT}${MCP_PATH}\n`);
 });
 
+// Reap idle sessions so probe traffic can't grow the heap unbounded.
+transports.startReaper(SESSION_SWEEP_MS, (reaped) => {
+  process.stderr.write(`shumi-mcp: reaped ${reaped} idle session(s), ${transports.size} active\n`);
+});
+
 // Flush queued analytics on shutdown (Render sends SIGTERM on deploy/scale).
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, async () => {
+    transports.stopReaper();
     server.close();
     await shutdownTelemetry();
     process.exit(0);
