@@ -91,7 +91,18 @@ PORT=8787 SHUMI_MCP_ALLOWED_ORIGINS=https://yourapp.com npm run start:http
 ```
 
 Each request authenticates with its own `Authorization: Bearer shumi_sk_*` header; that token is
-forwarded to the upstream API per request. Endpoint: `POST/GET/DELETE /mcp`, health: `GET /health`.
+forwarded to the upstream API per request. Endpoint: `POST/GET/DELETE /mcp`, health: `GET /health`
+(reports `sessions`, the live session count).
+
+The server is stateful — one transport + server per session. Idle sessions are reaped on a timer so
+clients that `initialize` but never `DELETE` (liveness probes, registry health checks) cannot grow
+the heap unbounded. Tunables (all optional):
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SHUMI_MCP_SESSION_TTL_MS` | `600000` (10 min) | Idle timeout before a session is closed. |
+| `SHUMI_MCP_MAX_SESSIONS` | `500` | Hard cap; the least-recently-active session is evicted at capacity. |
+| `SHUMI_MCP_SESSION_SWEEP_MS` | `60000` (1 min) | How often the reaper runs. |
 
 ## Develop
 
