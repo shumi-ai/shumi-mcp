@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { createShumiServer } from '../src/server.js';
-import { initTelemetry, shutdownTelemetry } from '../src/telemetry.js';
+import { initTelemetry, identifySession, shutdownTelemetry } from '../src/telemetry.js';
 
 /**
  * stdio entry point — the default. Run locally via `npx -y @shumi-ai/mcp`.
@@ -21,6 +21,7 @@ import { initTelemetry, shutdownTelemetry } from '../src/telemetry.js';
  */
 function main() {
   initTelemetry('stdio');
+  identifySession();
   const handle = serveStdio(() => createShumiServer(), {
     legacy: 'serve',
     onerror: (err) => process.stderr.write(`shumi-mcp: ${err?.stack || err}\n`),
