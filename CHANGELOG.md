@@ -4,6 +4,36 @@ All notable changes to `@shumi-ai/mcp` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-08-19
+
+Everything here was found by calling the hosted server as a user would and
+reading what came back. None of it failed a test or raised an error, which is
+why none of it had been noticed.
+
+### Fixed
+- **A single tool call could exhaust a model's context window.** `get_market_sentiment`
+  returned **885 KB** (~227k tokens); `get_signal` and `get_coin_sentiment` ~270 KB
+  each. `top` bounds the number of rows and nothing bounded their size — 838 KB of
+  that 885 KB was one `sources` array of 4,569 provenance links on the first of 22
+  rows. Arrays are now capped at every depth, and what was dropped is reported in
+  `meta._truncated` and announced in the text block, so a model cannot mistake an
+  abridged list for a complete one. Measured after: 885 KB → 21 KB, 270 KB → 12 KB,
+  266 KB → 10 KB, with summaries, stances and row counts unchanged.
+- **`get_coin_historical` could only ever return "now".** It never passed the
+  `amount`/`interval` the route has always accepted, so a tool named *historical*
+  reached exactly one moment. It also described three things it does not return
+  and never said the shape is a single point rather than a series.
+- **The free-tier allowance quoted to new users was wrong.** The first sentence
+  this server shows an unauthenticated caller promised "3 free queries"; the gate
+  grants 10 lifetime plus 1 a day. The figure is now read from the server's own
+  manifest rather than written down here, and is omitted rather than guessed when
+  the manifest is unreachable.
+
+### Added
+- `SHUMI_MCP_MAX_ARRAY_ITEMS` (50) and `SHUMI_MCP_MAX_RESPONSE_BYTES` (40 KB) —
+  the context budget, tunable for self-hosters who want the firehose.
+- `amount` and `interval` on `get_coin_historical`.
+
 ## [1.0.0] - 2026-08-19
 
 First release on the current MCP protocol revision, and the first stateless one.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "shumi",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Crypto trade intelligence: prices, trends, funding rates, sentiment, narratives, market regime, signals, pair and delta-neutral ideas, real-world assets, and holder tracking.",
   "author": {
     "name": "Shumi",
