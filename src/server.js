@@ -42,6 +42,14 @@ export function createShumiServer() {
   // events were per-tool-call. clientInfo (name/version) arrives in the
   // initialize handshake, so this is also the one place we learn WHICH MCP
   // client (Claude Desktop, Cursor, …) is connecting.
+  //
+  // This hook only ever fires on **stdio**, where serveStdio pins one instance
+  // for the connection's lifetime. It cannot fire over HTTP: it hangs off the
+  // `notifications/initialized` message, which under stateless serving arrives
+  // as a separate request answered by a different instance. HTTP therefore
+  // captures the same event at the transport edge instead — see
+  // http-server.js. Verified, not assumed: wiring this hook and driving a
+  // legacy `initialize` through the HTTP handler never calls it.
   server.server.oninitialized = () => {
     const clientInfo = server.server.getClientVersion();
     capture('mcp.session_started', {
