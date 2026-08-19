@@ -108,6 +108,10 @@ export async function askQuery({ messages, raw = false, archetype = 'base', comm
     deviceId: getDeviceId(),
     raw,
     archetype,
+    // Marks this call as MCP-surface so the server can apply its per-surface
+    // answerer model (Strapi mcpModelId). The server ignores unknown values,
+    // and older servers ignore the field entirely.
+    client: 'mcp',
   };
   const wallet = getWalletAddress();
   if (wallet) body.walletAddress = wallet;
