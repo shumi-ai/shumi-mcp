@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { apiGet } from './http-client.js';
 import { errorPayload } from './errorMap.js';
 import { registerTools, toolCatalog } from './tools/index.js';
-import { instrumentToolCalls } from './telemetry.js';
+import { instrumentToolCalls, capture } from './telemetry.js';
 
 export const SERVER_NAME = 'shumi';
 
@@ -36,6 +36,28 @@ export function createShumiServer() {
   instrumentToolCalls(server);
   registerTools(server);
   registerResources(server);
+
+  // A session that connects and lists tools but never calls one — every
+  // registry probe and most first contacts — is otherwise invisible: the only
+  // events were per-tool-call. clientInfo (name/version) arrives in the
+  // initialize handshake, so this is also the one place we learn WHICH MCP
+  // client (Claude Desktop, Cursor, …) is connecting.
+  //
+  // This hook only ever fires on **stdio**, where serveStdio pins one instance
+  // for the connection's lifetime. It cannot fire over HTTP: it hangs off the
+  // `notifications/initialized` message, which under stateless serving arrives
+  // as a separate request answered by a different instance. HTTP therefore
+  // captures the same event at the transport edge instead — see
+  // http-server.js. Verified, not assumed: wiring this hook and driving a
+  // legacy `initialize` through the HTTP handler never calls it.
+  server.server.oninitialized = () => {
+    const clientInfo = server.server.getClientVersion();
+    capture('mcp.session_started', {
+      client_name: clientInfo?.name,
+      client_version: clientInfo?.version,
+      server_version: SERVER_VERSION,
+    });
+  };
 
   return server;
 }

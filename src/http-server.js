@@ -1,8 +1,9 @@
 import http from 'node:http';
 import { toNodeHandler } from '@modelcontextprotocol/node';
-import { createHandler } from './mcp-handler.js';
+import { createHandler, sessionStartProperties } from './mcp-handler.js';
+import { SERVER_VERSION } from './server.js';
 import { runWithRequest } from './request-context.js';
-import { initTelemetry, shutdownTelemetry } from './telemetry.js';
+import { initTelemetry, capture, shutdownTelemetry } from './telemetry.js';
 
 // Initialize PostHog once for the lifetime of the HTTP server (multi-tenant:
 // each request is attributed to its own bearer token inside the tool handler).
@@ -113,6 +114,21 @@ function readJsonBody(req) {
   });
 }
 
+/**
+ * `mcp.session_started` for the HTTP transport.
+ *
+ * The `oninitialized` hook in server.js cannot serve this here: it hangs off
+ * the `notifications/initialized` message, which under stateless serving is a
+ * separate request answered by a different instance, so it never fires. The
+ * event is captured at the transport edge instead, off the body we already
+ * parse for the size cap. Which requests count as first contact — and what the
+ * modern era does not tell us — is documented on sessionStartProperties().
+ */
+function captureSessionStart(body) {
+  const props = sessionStartProperties(body, SERVER_VERSION);
+  if (props) capture('mcp.session_started', props);
+}
+
 function writeJson(res, status, obj) {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(obj));
@@ -153,7 +169,11 @@ const server = http.createServer(async (req, res) => {
 
   try {
     const body = req.method === 'POST' ? await readJsonBody(req) : undefined;
-    return await runWithRequest({ token }, () => handleMcp(req, res, body));
+    // Attribution needs the caller's token, so capture inside the context.
+    return await runWithRequest({ token }, () => {
+      captureSessionStart(body);
+      return handleMcp(req, res, body);
+    });
   } catch (err) {
     process.stderr.write(`shumi-mcp(http): ${err?.stack || err}\n`);
     if (!res.headersSent) rpcError(res, 500, 'Internal error');
