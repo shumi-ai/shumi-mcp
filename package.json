@@ -51,8 +51,12 @@
     "url": "https://github.com/mayrsascha/shumi-mcp/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/node": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "posthog-node": "^5.38.6",
-    "zod": "^3.25.0"
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.0.0"
   }
 }

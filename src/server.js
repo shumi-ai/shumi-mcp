@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer } from '@modelcontextprotocol/server';
 import { apiGet } from './http-client.js';
 import { errorPayload } from './errorMap.js';
 import { registerTools, toolCatalog } from './tools/index.js';
