@@ -4,10 +4,12 @@ import { createHandler, sessionStartProperties } from './mcp-handler.js';
 import { SERVER_VERSION } from './server.js';
 import { runWithRequest } from './request-context.js';
 import { initTelemetry, capture, shutdownTelemetry } from './telemetry.js';
+import { primeFreeTier } from './free-tier.js';
 
 // Initialize PostHog once for the lifetime of the HTTP server (multi-tenant:
 // each request is attributed to its own bearer token inside the tool handler).
 initTelemetry('http');
+primeFreeTier(); // fire-and-forget; the hint drops its numbers until it lands
 
 /**
  * Remote transport — one `createMcpHandler` serving both protocol eras.
