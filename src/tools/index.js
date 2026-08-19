@@ -84,10 +84,27 @@ export const TYPED_TOOLS = [
   },
   {
     name: 'get_coin_historical',
-    title: 'Coin historical metadata',
-    description: 'Historical metadata for a coin (holder cohorts, sentiment and funding history).',
-    inputSchema: { symbol: z.string().min(1).describe('Coin symbol, e.g. ETH.') },
-    build: ({ symbol }) => ({ route: `coin/historical/${encodeURIComponent(symbol)}` }),
+    title: 'Coin metrics at a past point in time',
+    description:
+      'Market cap, volume, open interest, funding rate and price for a coin AS OF a chosen point in the past. Returns a single snapshot, not a series: call it once per point you want to compare (e.g. amount=7 interval=d for a week ago, then again with no offset for now). Use this to answer "how has funding/open interest changed since…".',
+    inputSchema: {
+      symbol: z.string().min(1).describe('Coin symbol, e.g. ETH.'),
+      amount: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe('How far back to look, in units of `interval`. Omit for the most recent snapshot.'),
+      interval: z.enum(['h', 'd']).optional().describe('Unit for `amount`: h (hours) or d (days). Defaults to hours.'),
+    },
+    // The route has always taken these; the tool simply never passed them, so
+    // every call returned "now" and the tool could not answer the historical
+    // question its own name promises. Verified against production: amount=5&
+    // interval=d returns a materially different snapshot from the bare call.
+    build: ({ symbol, amount, interval }) => ({
+      route: `coin/historical/${encodeURIComponent(symbol)}`,
+      query: { ...(amount != null ? { amount: String(amount) } : {}), ...(interval ? { interval } : {}) },
+    }),
   },
   {
     name: 'get_market_health',

@@ -142,3 +142,16 @@ test('toolCatalog lists coin risk and the nlp tools', () => {
   assert.ok(c.typed.some((t) => t.name === 'get_coin_risk'));
   assert.ok(c.nlp.some((t) => t.name === 'ask_shumi'));
 });
+
+test('get_coin_historical passes the time offset through to the route', () => {
+  // The tool shipped without these, so every call returned "now" — a tool whose
+  // name promises history could not answer a historical question. Verified
+  // against production: amount=5&interval=d returns a different snapshot.
+  const t = TYPED_TOOLS.find((x) => x.name === 'get_coin_historical');
+  assert.deepEqual(t.build({ symbol: 'BTC' }), { route: 'coin/historical/BTC', query: {} });
+  assert.deepEqual(t.build({ symbol: 'BTC', amount: 7, interval: 'd' }), {
+    route: 'coin/historical/BTC',
+    query: { amount: '7', interval: 'd' },
+  });
+  assert.deepEqual(t.build({ symbol: 'ETH', interval: 'h' }).query, { interval: 'h' });
+});
