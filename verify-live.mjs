@@ -15,9 +15,8 @@
  *   after 3 calls — which still proves the funnel + error path).
  * - Without SHUMI_TOKEN every call should come back AUTH (clean error path).
  */
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const argv = process.argv.slice(2);
 const remoteIdx = argv.indexOf('--remote');

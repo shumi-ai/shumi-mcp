@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { isInitializeRequest } from '@modelcontextprotocol/server';
+import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
 import { createShumiServer } from './server.js';
 import { runWithRequest } from './request-context.js';
 import { initTelemetry, shutdownTelemetry } from './telemetry.js';
@@ -21,6 +21,15 @@ initTelemetry('http');
  * apply. (OAuth 2.1 metadata-discovery is the Phase-3 standards upgrade.)
  *
  * Stateful: one transport + McpServer per session, keyed by Mcp-Session-Id.
+ *
+ * The session model is deliberately unchanged by the SDK v2 move. v2 also ships
+ * a stateless per-request transport (PerRequestHTTPServerTransport /
+ * createMcpHandler), which is what protocol revision 2026-07-28 assumes — but
+ * that revision is not in this SDK's SUPPORTED_PROTOCOL_VERSIONS yet
+ * (LATEST_PROTOCOL_VERSION is still 2025-11-25). Going stateless now would mean
+ * rebuilding all 31 tools per request with no protocol version that rewards it,
+ * so it waits for the SDK release that negotiates 2026-07-28. session-store.js
+ * is the thing that disappears when it lands.
  */
 
 const PORT = Number(process.env.PORT || 8787);
@@ -165,7 +174,7 @@ const server = http.createServer(async (req, res) => {
       if (!isInitializeRequest(body)) {
         return rpcError(res, 400, 'No valid session; send an initialize request first');
       }
-      transport = new StreamableHTTPServerTransport({
+      transport = new NodeStreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => transports.set(id, transport),
       });
