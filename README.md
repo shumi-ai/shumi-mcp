@@ -82,27 +82,30 @@ entitlement).
 Gating (free / access / pro tiers and pay-per-call) is enforced server-side, exactly as for the CLI —
 out-of-quota responses come back as a structured error with an actionable hint.
 
-## Remote (Streamable HTTP)
+## Remote (HTTP)
 
-For a hosted, multi-user deployment, run the Streamable HTTP transport (MCP `2025-11-25`):
+For a hosted, multi-user deployment:
 
 ```bash
 PORT=8787 SHUMI_MCP_ALLOWED_ORIGINS=https://yourapp.com npm run start:http
 ```
 
 Each request authenticates with its own `Authorization: Bearer shumi_sk_*` header; that token is
-forwarded to the upstream API per request. Endpoint: `POST/GET/DELETE /mcp`, health: `GET /health`
-(reports `sessions`, the live session count).
+forwarded to the upstream API per request. Endpoint: `POST /mcp`, health: `GET /health`.
 
-The server is stateful — one transport + server per session. Idle sessions are reaped on a timer so
-clients that `initialize` but never `DELETE` (liveness probes, registry health checks) cannot grow
-the heap unbounded. Tunables (all optional):
+**The server is stateless.** One endpoint serves both protocol revisions:
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `SHUMI_MCP_SESSION_TTL_MS` | `600000` (10 min) | Idle timeout before a session is closed. |
-| `SHUMI_MCP_MAX_SESSIONS` | `500` | Hard cap; the least-recently-active session is evicted at capacity. |
-| `SHUMI_MCP_SESSION_SWEEP_MS` | `60000` (1 min) | How often the reaper runs. |
+- **`2026-07-28`** — no `initialize`, no `Mcp-Session-Id`. A request carries its own routing in
+  headers (`Mcp-Method`, plus `Mcp-Name` on `tools/call`) and its protocol envelope in `params._meta`,
+  so an intermediary can route and meter a call without parsing the body.
+- **`2025-11-25` and earlier** — still served. Old clients keep their `initialize` handshake, but each
+  exchange is answered by its own instance rather than a session.
+
+Because nothing outlives a request, `GET` and `DELETE` (the 2025 session operations) return `405`,
+and the session tunables that used to live here — `SHUMI_MCP_SESSION_TTL_MS`, `SHUMI_MCP_MAX_SESSIONS`,
+`SHUMI_MCP_SESSION_SWEEP_MS` — are gone. They are safe to delete from any deployment; unset they do
+nothing. The idle-session reaper they configured existed to stop liveness probes from growing the
+heap, which cannot happen when no session is kept.
 
 ## Develop
 

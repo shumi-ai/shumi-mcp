@@ -1,35 +1,33 @@
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
-import { isInitializeRequest } from '@modelcontextprotocol/server';
-import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node';
-import { createShumiServer } from './server.js';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { createHandler } from './mcp-handler.js';
 import { runWithRequest } from './request-context.js';
 import { initTelemetry, shutdownTelemetry } from './telemetry.js';
-import { SessionStore, DEFAULT_TTL_MS, DEFAULT_MAX_SESSIONS, DEFAULT_SWEEP_MS } from './session-store.js';
 
 // Initialize PostHog once for the lifetime of the HTTP server (multi-tenant:
 // each request is attributed to its own bearer token inside the tool handler).
 initTelemetry('http');
 
 /**
- * Remote transport — Streamable HTTP (MCP 2025-11-25), the current recommended
- * transport for hosted servers (the older HTTP+SSE transport is deprecated).
+ * Remote transport — one `createMcpHandler` serving both protocol eras.
+ *
+ * Modern (protocol revision 2026-07-28) is stateless by construction: there is
+ * no `initialize` handshake and no `Mcp-Session-Id`, so every request is
+ * answered by a fresh server built from the factory below. Legacy 2025-era
+ * clients are still served, via the handler's built-in `legacy: 'stateless'`
+ * posture — the same factory, one instance per request, no session table. GET
+ * and DELETE were session operations, so under stateless serving the handler
+ * answers them 405.
+ *
+ * That is why `session-store.js` is gone rather than merely unused: with no
+ * session id to key on there is nothing to store, and the idle-session reaper
+ * it existed to provide (the OOM fix in #12) is moot when no state outlives a
+ * request.
  *
  * Auth inherits the CLI model: each request carries `Authorization: Bearer
- * shumi_sk_*`, which we thread through to the upstream call via AsyncLocalStorage
- * so multiple users share one process safely. Server-side tiers/quota/x402 still
+ * shumi_sk_*`, threaded to the upstream call through AsyncLocalStorage so
+ * multiple users share one process safely. Server-side tiers/quota/x402 still
  * apply. (OAuth 2.1 metadata-discovery is the Phase-3 standards upgrade.)
- *
- * Stateful: one transport + McpServer per session, keyed by Mcp-Session-Id.
- *
- * The session model is deliberately unchanged by the SDK v2 move. v2 also ships
- * a stateless per-request transport (PerRequestHTTPServerTransport /
- * createMcpHandler), which is what protocol revision 2026-07-28 assumes — but
- * that revision is not in this SDK's SUPPORTED_PROTOCOL_VERSIONS yet
- * (LATEST_PROTOCOL_VERSION is still 2025-11-25). Going stateless now would mean
- * rebuilding all 31 tools per request with no protocol version that rewards it,
- * so it waits for the SDK release that negotiates 2026-07-28. session-store.js
- * is the thing that disappears when it lands.
  */
 
 const PORT = Number(process.env.PORT || 8787);
@@ -52,13 +50,13 @@ function protectedResourceMetadata() {
   return { resource: `${PUBLIC_URL}${MCP_PATH}`, authorization_servers: [AUTH_SERVER] };
 }
 
-// Bounded sessionId -> transport store. Idle sessions are reaped on a timer so
-// liveness probes that `initialize` but never DELETE cannot leak the heap to an
-// OOM (see session-store.js). Tunables via env, sensible defaults otherwise.
-const SESSION_TTL_MS = Number(process.env.SHUMI_MCP_SESSION_TTL_MS) || DEFAULT_TTL_MS;
-const MAX_SESSIONS = Number(process.env.SHUMI_MCP_MAX_SESSIONS) || DEFAULT_MAX_SESSIONS;
-const SESSION_SWEEP_MS = Number(process.env.SHUMI_MCP_SESSION_SWEEP_MS) || DEFAULT_SWEEP_MS;
-const transports = new SessionStore({ ttlMs: SESSION_TTL_MS, maxSessions: MAX_SESSIONS });
+// One handler for both eras (see mcp-handler.js for the era rules).
+const mcpHandler = createHandler({
+  onerror: (err) => process.stderr.write(`shumi-mcp(mcp): ${err?.stack || err}\n`),
+});
+const handleMcp = toNodeHandler(mcpHandler, {
+  onerror: (err) => process.stderr.write(`shumi-mcp(adapter): ${err?.stack || err}\n`),
+});
 
 function originAllowed(origin) {
   if (!origin) return true; // non-browser clients omit Origin (DNS-rebinding N/A)
@@ -94,6 +92,8 @@ function resolveRequestToken(req, url) {
   return bearerToken(req) || tokenFromConfig(url);
 }
 
+// The handler can read the body itself, but then nothing bounds it. Read it
+// here to keep the 4 MB cap and hand the parsed value over as `parsedBody`.
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -126,7 +126,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (url.pathname === '/health') {
-    return writeJson(res, 200, { ok: true, server: 'shumi-mcp', sessions: transports.size });
+    return writeJson(res, 200, { ok: true, server: 'shumi-mcp', stateless: true });
   }
 
   // RFC 9728 Protected Resource Metadata — only advertised once an AS is set.
@@ -151,41 +151,9 @@ const server = http.createServer(async (req, res) => {
     return rpcError(res, 403, 'Origin not allowed');
   }
 
-  const sessionId = req.headers['mcp-session-id'];
-
   try {
-    // GET (SSE stream) and DELETE (session teardown) require an existing session.
-    if (req.method === 'GET' || req.method === 'DELETE') {
-      const transport = sessionId && transports.get(sessionId);
-      if (!transport) return rpcError(res, 400, 'Unknown or missing session');
-      return runWithRequest({ token }, () => transport.handleRequest(req, res));
-    }
-
-    if (req.method !== 'POST') {
-      res.writeHead(405, { Allow: 'GET, POST, DELETE' });
-      return res.end();
-    }
-
-    const body = await readJsonBody(req);
-
-    let transport = sessionId ? transports.get(sessionId) : undefined;
-
-    if (!transport) {
-      if (!isInitializeRequest(body)) {
-        return rpcError(res, 400, 'No valid session; send an initialize request first');
-      }
-      transport = new NodeStreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (id) => transports.set(id, transport),
-      });
-      transport.onclose = () => {
-        if (transport.sessionId) transports.delete(transport.sessionId);
-      };
-      const mcp = createShumiServer();
-      await mcp.connect(transport);
-    }
-
-    return runWithRequest({ token }, () => transport.handleRequest(req, res, body));
+    const body = req.method === 'POST' ? await readJsonBody(req) : undefined;
+    return await runWithRequest({ token }, () => handleMcp(req, res, body));
   } catch (err) {
     process.stderr.write(`shumi-mcp(http): ${err?.stack || err}\n`);
     if (!res.headersSent) rpcError(res, 500, 'Internal error');
@@ -193,19 +161,14 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  process.stderr.write(`shumi-mcp: Streamable HTTP server on http://localhost:${PORT}${MCP_PATH}\n`);
-});
-
-// Reap idle sessions so probe traffic can't grow the heap unbounded.
-transports.startReaper(SESSION_SWEEP_MS, (reaped) => {
-  process.stderr.write(`shumi-mcp: reaped ${reaped} idle session(s), ${transports.size} active\n`);
+  process.stderr.write(`shumi-mcp: stateless MCP server on http://localhost:${PORT}${MCP_PATH}\n`);
 });
 
 // Flush queued analytics on shutdown (Render sends SIGTERM on deploy/scale).
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, async () => {
-    transports.stopReaper();
     server.close();
+    await mcpHandler.close();
     await shutdownTelemetry();
     process.exit(0);
   });
