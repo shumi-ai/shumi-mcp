@@ -1,5 +1,5 @@
 import { ApiError } from './http-client.js';
-import { freeTierPhrase } from './free-tier.js';
+import { freeTierPhrase, primeFreeTier } from './free-tier.js';
 
 /**
  * Translate an ApiError (or any thrown error) into an MCP tool result with
@@ -29,6 +29,9 @@ function defaultHint(status) {
     // The allowance is quoted from the server's manifest, never written down
     // here — see free-tier.js for why. Unknown numbers are omitted, not guessed.
     const phrase = freeTierPhrase();
+    // Not known yet (boot race, or the manifest was down at startup). Kick off a
+    // retry so the NEXT user gets the number; this call still answers now.
+    if (!phrase) primeFreeTier();
     return phrase
       ? `Create a free Shumi key at https://shumi.ai — ${phrase}. Then set it as the SHUMI_TOKEN environment variable.`
       : 'Create a free Shumi key at https://shumi.ai, then set it as the SHUMI_TOKEN environment variable.';

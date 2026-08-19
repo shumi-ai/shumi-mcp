@@ -17,13 +17,25 @@ import { API_URL } from './config.js';
  * if it never does — the hint simply omits the numbers rather than inventing them.
  */
 
-let freeTier = null;
-let primed = false;
+const RETRY_AFTER_MS = 60_000;
 
-/** Fire-and-forget prime. Safe to call more than once; never throws, never blocks. */
-export function primeFreeTier({ fetchImpl = fetch, timeoutMs = 4000 } = {}) {
-  if (primed) return;
-  primed = true;
+let freeTier = null;
+let inFlight = false;
+let nextAttemptAt = 0;
+
+/**
+ * Fire-and-forget prime. Never throws, never blocks, never runs twice at once.
+ *
+ * A failed attempt does NOT latch: the HTTP transport is long-running, and if
+ * priming were one-shot then a manifest that happened to be redeploying at boot
+ * would cost every user for the rest of the process's life. Failures are retried,
+ * but no more often than once a minute, so a permanently unreachable manifest
+ * costs one request per minute rather than one per error.
+ */
+export function primeFreeTier({ fetchImpl = fetch, timeoutMs = 4000, now = () => Date.now() } = {}) {
+  if (freeTier || inFlight || now() < nextAttemptAt) return;
+  inFlight = true;
+  nextAttemptAt = now() + RETRY_AFTER_MS;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   if (timer.unref) timer.unref();
@@ -36,7 +48,10 @@ export function primeFreeTier({ fetchImpl = fetch, timeoutMs = 4000 } = {}) {
     .catch(() => {
       /* stay null — the hint drops the numbers rather than guessing */
     })
-    .finally(() => clearTimeout(timer));
+    .finally(() => {
+      clearTimeout(timer);
+      inFlight = false;
+    });
 }
 
 const queries = (n) => `${n} ${n === 1 ? 'query' : 'queries'}`;
@@ -53,6 +68,7 @@ export function freeTierPhrase() {
 
 /** Test seam. */
 export const __internal = {
-  reset() { freeTier = null; primed = false; },
+  reset() { freeTier = null; inFlight = false; nextAttemptAt = 0; },
   set(t) { freeTier = t; },
+  RETRY_AFTER_MS,
 };
