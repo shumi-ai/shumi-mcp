@@ -1,4 +1,5 @@
 import { ApiError } from './http-client.js';
+import { freeTierPhrase, primeFreeTier } from './free-tier.js';
 
 /**
  * Translate an ApiError (or any thrown error) into an MCP tool result with
@@ -25,7 +26,15 @@ function codeForStatus(status) {
 // payment-processor names, no forbidden words ("unlock"/"leverage"/etc.).
 function defaultHint(status) {
   if (status === 401 || status === 403) {
-    return 'Create a free Shumi key at https://shumi.ai (3 free queries to try it), then set it as the SHUMI_TOKEN environment variable.';
+    // The allowance is quoted from the server's manifest, never written down
+    // here — see free-tier.js for why. Unknown numbers are omitted, not guessed.
+    const phrase = freeTierPhrase();
+    // Not known yet (boot race, or the manifest was down at startup). Kick off a
+    // retry so the NEXT user gets the number; this call still answers now.
+    if (!phrase) primeFreeTier();
+    return phrase
+      ? `Create a free Shumi key at https://shumi.ai — ${phrase}. Then set it as the SHUMI_TOKEN environment variable.`
+      : 'Create a free Shumi key at https://shumi.ai, then set it as the SHUMI_TOKEN environment variable.';
   }
   if (status === 402 || status === 429) {
     return "You've used your free Shumi queries. Upgrade at https://shumi.ai — Plus is $20/mo (50 queries/day), Pro is $200/mo (unlimited). Holding $SHUMI also grants access.";

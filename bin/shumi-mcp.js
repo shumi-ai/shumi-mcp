@@ -2,6 +2,7 @@
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { createShumiServer } from '../src/server.js';
 import { initTelemetry, identifySession, shutdownTelemetry } from '../src/telemetry.js';
+import { primeFreeTier } from '../src/free-tier.js';
 
 /**
  * stdio entry point — the default. Run locally via `npx -y @shumi-ai/mcp`.
@@ -22,6 +23,7 @@ import { initTelemetry, identifySession, shutdownTelemetry } from '../src/teleme
 function main() {
   initTelemetry('stdio');
   identifySession();
+  primeFreeTier(); // fire-and-forget; the hint drops its numbers until it lands
   const handle = serveStdio(() => createShumiServer(), {
     legacy: 'serve',
     onerror: (err) => process.stderr.write(`shumi-mcp: ${err?.stack || err}\n`),
