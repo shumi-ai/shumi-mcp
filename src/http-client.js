@@ -1,4 +1,5 @@
 import { API_URL, getToken, getDeviceId, getWalletAddress } from './config.js';
+import { authHint } from './hints.js';
 
 /**
  * HTTP client for the coinrotator-ai `/api/cli/*` surface. Mirrors
@@ -36,7 +37,7 @@ function authHeaderOrThrow() {
       error: {
         code: 'AUTH_REQUIRED',
         message: 'Authentication required.',
-        hint: 'Create a free Shumi key at https://shumi.ai (3 free queries to try it), then set it as the SHUMI_TOKEN environment variable.',
+        hint: authHint(),
       },
     });
   }

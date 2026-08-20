@@ -17,6 +17,6 @@ startCommand:
       shumiToken:
         type: string
         title: Shumi API key
-        description: Your shumi_sk_* key from https://shumi.ai (3 free queries, then upgrade).
+        description: Your shumi_sk_* key from https://shumi.ai (10 free queries, then 1 a day).
   exampleConfig:
     shumiToken: shumi_sk_example
