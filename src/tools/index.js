@@ -34,6 +34,31 @@ const SHARED_OUTPUT_SCHEMA = {
   error: z.unknown().optional(),
 };
 
+// The two NLP tools return prose, not an envelope, so SHARED_OUTPUT_SCHEMA does
+// not describe them. They shipped with no outputSchema at all, which left them
+// the only tools a host could not introspect — it had to guess that the payload
+// was an answer string. Declaring a schema also obliges every non-error return
+// to carry structuredContent, which is why answerResult() exists rather than the
+// two ad-hoc returns that were here before.
+const ANSWER_OUTPUT_SCHEMA = {
+  answer: z.string().optional().describe('The synthesized natural-language answer. Absent only when the engine produced no prose.'),
+  steps: z.unknown().optional().describe('Raw engine steps. Present only as a fallback when `answer` is absent.'),
+};
+
+/**
+ * Shape an NLP engine response for both content-only and structured hosts.
+ *
+ * `answer` is optional rather than required because the engine can legitimately
+ * return steps with no prose, and filling `answer` with a JSON blob to satisfy a
+ * required field would hand the caller a string that is not an answer.
+ */
+function answerResult(res) {
+  const text = res?.text;
+  if (text) return { content: [{ type: 'text', text }], structuredContent: { answer: text } };
+  const steps = res?.steps ?? res;
+  return { content: [{ type: 'text', text: JSON.stringify(steps) }], structuredContent: { steps } };
+}
+
 export const TYPED_TOOLS = [
   {
     name: 'lookup_coin',
@@ -490,14 +515,12 @@ function registerNlp(server) {
         query: z.string().min(1).describe('The natural-language question, e.g. "is funding extreme on SOL right now?".'),
         archetype: z.string().optional().describe('Specialization path (default "base"; e.g. "perp-dex").'),
       },
+      outputSchema: ANSWER_OUTPUT_SCHEMA,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ query, archetype = 'base' }) => {
       try {
-        const res = await askQuery({ messages: [{ role: 'user', content: query }], archetype });
-        const text = res?.text;
-        if (text) return { content: [{ type: 'text', text }] };
-        return result(res?.steps ?? res);
+        return answerResult(await askQuery({ messages: [{ role: 'user', content: query }], archetype }));
       } catch (err) {
         return toMcpError(err);
       }
@@ -513,21 +536,21 @@ function registerNlp(server) {
         query: z.string().min(1).describe('What to search for.'),
         answer: z.boolean().optional().describe('Return a direct synthesized answer instead of raw search results.'),
       },
+      outputSchema: ANSWER_OUTPUT_SCHEMA,
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ query, answer }) => {
       try {
         const constructed = answer ? `Answer this question: ${query}` : `Search the web for: ${query}`;
-        const res = await askQuery({ messages: [{ role: 'user', content: constructed }], commandContext: 'search' });
-        const text = res?.text;
-        if (text) return { content: [{ type: 'text', text }] };
-        return result(res?.steps ?? res);
+        return answerResult(await askQuery({ messages: [{ role: 'user', content: constructed }], commandContext: 'search' }));
       } catch (err) {
         return toMcpError(err);
       }
     },
   );
 }
+
+export { answerResult };
 
 export function registerTools(server) {
   registerCoinRisk(server);

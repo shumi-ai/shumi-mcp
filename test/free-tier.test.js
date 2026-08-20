@@ -106,3 +106,40 @@ test('concurrent primes collapse into one request', async () => {
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(freeTierPhrase(), '4 queries free, then 2 more a day');
 });
+
+// ── The escaped path ────────────────────────────────────────────────────────
+// free-tier.js was written to stop the server promising "3 free queries" when
+// the gate grants ten. Only errorMap.js was switched over; authHeaderOrThrow in
+// http-client.js kept its own hardcoded string, so the wrong number was still
+// live in production on 2026-08-20. These pin both paths to one builder.
+
+test('the no-token hint quotes the manifest, not a hardcoded number', async () => {
+  __internal.reset();
+  __internal.set({ lifetime: 10, dailyDrip: 1 });
+  const { authHint } = await import('../src/hints.js');
+  const hint = authHint();
+  assert.match(hint, /10 queries free, then 1 more a day/);
+  assert.doesNotMatch(hint, /3 free queries/);
+});
+
+test('an unknown allowance is omitted, never guessed', async () => {
+  __internal.reset();
+  const { authHint } = await import('../src/hints.js');
+  const hint = authHint();
+  assert.match(hint, /Create a free Shumi key/);
+  assert.doesNotMatch(hint, /\d+ quer/); // no number at all rather than a wrong one
+});
+
+test('remote callers are told about the URL/header, not an environment variable', async () => {
+  __internal.reset();
+  __internal.set({ lifetime: 10, dailyDrip: 1 });
+  const { authHint } = await import('../src/hints.js');
+  const { runWithRequest } = await import('../src/request-context.js');
+  // A Claude or ChatGPT connector user configures a URL in a web form and has no
+  // shell to export SHUMI_TOKEN into.
+  const remote = runWithRequest({ token: null }, () => authHint());
+  assert.match(remote, /connector URL as \?apiKey=|Authorization: Bearer/);
+  assert.doesNotMatch(remote, /environment variable/);
+  // stdio keeps the env-var advice, which is correct there.
+  assert.match(authHint(), /SHUMI_TOKEN environment variable/);
+});
