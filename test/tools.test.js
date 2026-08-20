@@ -4,7 +4,9 @@ import {
   COIN_RISK_DESCRIPTION,
   FUNDING_MOMENTUM_DESCRIPTION,
   TYPED_TOOLS,
+  answerResult,
   buildRiskRows,
+  registerTools,
   toolCatalog,
 } from '../src/tools/index.js';
 import { applyFilters, unwrap } from '../src/tools/util.js';
@@ -154,4 +156,45 @@ test('get_coin_historical passes the time offset through to the route', () => {
     query: { amount: '7', interval: 'd' },
   });
   assert.deepEqual(t.build({ symbol: 'ETH', interval: 'h' }).query, { interval: 'h' });
+});
+
+// ── NLP tool output contract ────────────────────────────────────────────────
+// ask_shumi and search_web shipped with no outputSchema, so a host had to guess
+// that the payload was an answer string. Declaring one obliges every non-error
+// return to carry structuredContent; these tests pin both halves together, since
+// declaring the schema without the structured return is worse than neither.
+
+test('every registered tool declares an outputSchema', () => {
+  const registered = [];
+  const server = {
+    registerTool(name, config) {
+      registered.push({ name, hasOutputSchema: Boolean(config.outputSchema) });
+    },
+  };
+  registerTools(server);
+
+  const missing = registered.filter((t) => !t.hasOutputSchema).map((t) => t.name);
+  assert.deepEqual(missing, [], `tools without outputSchema: ${missing.join(', ')}`);
+  assert.equal(registered.length, TYPED_TOOLS.length + 3); // + get_coin_risk, ask_shumi, search_web
+});
+
+test('answerResult puts prose in both content and structuredContent', () => {
+  const r = answerResult({ text: 'Funding on SOL is +18% APR; longs pay.' });
+  assert.equal(r.content[0].text, 'Funding on SOL is +18% APR; longs pay.');
+  assert.equal(r.structuredContent.answer, 'Funding on SOL is +18% APR; longs pay.');
+  assert.equal(r.structuredContent.steps, undefined);
+});
+
+test('answerResult falls back to steps rather than faking an answer', () => {
+  // A JSON blob in `answer` would be a string that is not an answer.
+  const r = answerResult({ steps: [{ tool: 'get_prices' }] });
+  assert.equal(r.structuredContent.answer, undefined);
+  assert.deepEqual(r.structuredContent.steps, [{ tool: 'get_prices' }]);
+  assert.equal(r.content[0].text, JSON.stringify([{ tool: 'get_prices' }]));
+});
+
+test('answerResult always returns structuredContent, as the declared schema requires', () => {
+  for (const res of [{ text: 'x' }, { steps: [] }, {}, null]) {
+    assert.ok(answerResult(res).structuredContent, `structuredContent missing for ${JSON.stringify(res)}`);
+  }
 });
