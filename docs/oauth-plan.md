@@ -17,11 +17,14 @@ Written 2026-08-21 after probing the live server and Dynamic.
 | ChatGPT `search`/`fetch` pair | not required — became optional in 2026 |
 | **OAuth 2.1** | ❌ **dormant** |
 
-Today the only way to authenticate is `Authorization: Bearer shumi_sk_*`, or the same key
-pasted into the connector URL as `?apiKey=`. Claude's and ChatGPT's connector UIs have no
-custom-header field, so the URL form is the only one that works — which puts a long-lived
-secret into a third party's stored configuration, where it cannot be scoped or revoked
-per-client.
+Today authentication is `Authorization: Bearer shumi_sk_*`, or the same key pasted into
+the connector URL as `?apiKey=`.
+
+**Correction to an earlier draft of this page: the URL form must not be recommended.** The
+MCP authorization specification prohibits access tokens in the URI query string, and
+Anthropic's connector documentation calls a credential in a URL a security vulnerability —
+URLs land in server logs, proxies and browser history. The server still *accepts* the query
+form because Smithery passes config that way, but every hint now points at the header.
 
 ## What Dynamic can and cannot do
 
@@ -60,6 +63,36 @@ Both are gated behind `SHUMI_MCP_AUTH_SERVER`, which is unset in production, so 
 inert and the well-known path 404s. That gating is correct — advertising a metadata
 document that points at no authorization server would be worse than advertising nothing.
 
+## There is a way around OAuth today: `static_headers`
+
+Anthropic documents six connector auth types, not one:
+
+| type | what it is | availability |
+|---|---|---|
+| `oauth_dcr` | OAuth 2.0 + Dynamic Client Registration | out of the box |
+| `oauth_cimd` | OAuth 2.0 + Client ID Metadata Document | out of the box |
+| `oauth_anthropic_creds` | Anthropic stores *your* client id/secret | email `mcp-review@anthropic.com` |
+| `custom_connection` | URL/credentials supplied at connection time | email `mcp-review@anthropic.com` |
+| **`static_headers`** | **fixed API key or bearer entered as a request header** | **beta** |
+| `none` | authless | supported |
+
+`static_headers` needs **no authorization server at all**. An organization administrator
+pastes the `shumi_sk_*` key once and Claude sends it on every request. That unblocks Claude
+connector access today, with zero new infrastructure.
+
+Two caveats that decide whether it is enough:
+
+1. **The credential is shared by the organization, not per user.** Shumi meters per user —
+   free-tier allowance, entitlements, x402 spend. One org-wide key means one Shumi account
+   and one quota for everyone in that workspace. It unblocks *access*; it does not carry
+   *monetization*.
+2. **It is beta, with open bugs.** `anthropics/claude-ai-mcp#644` reports the configured
+   header being ignored and the client falling back to an OAuth flow against the server
+   origin.
+
+Note also that `oauth_anthropic_creds` does **not** remove the authorization-server
+requirement — it only removes DCR/CIMD from our side. We would still have to run an AS.
+
 ## The decision that is actually blocked
 
 Picking and provisioning the authorization server. Three viable shapes:
@@ -90,6 +123,29 @@ mine to make.** That is the single blocker; there is no technical unknown left.
    `shumi_sk_*` key resolve to the same account and the same entitlement.
 4. Keep `shumi_sk_*` working. It is what the CLI, stdio and Smithery use, and it must not
    be collateral damage of adding a second scheme.
+
+## Payments are a separate axis, and ours is already built
+
+x402 does not replace OAuth. OAuth answers *who is this*; x402 answers *did they pay*. The
+2026 comparisons are consistent on where each protocol fits:
+
+- **x402** — HTTP-native stablecoin pay-per-call. V2 shipped December 2025, Stripe
+  integration February 2026, zero protocol fees beyond L2 gas, ~165M transactions across
+  ~69k agents at a median $0.028/call. Best fit for agents paying per API call. **We
+  already run this on the CLI.**
+- **ACP** — human-present conversational checkout (ChatGPT Instant Checkout, February
+  2026). Wrong shape for per-call data, and OpenAI pivoted to an app-based model in March
+  2026.
+- **AP2** — an authorization framework with cryptographic mandates; overhead for simple
+  per-call monetization.
+- **MPP** — streaming micropayments inside pre-authorized sessions, mainnet March 2026;
+  unnecessary complexity for stateless calls.
+
+The limit is the host, not the protocol: Claude and ChatGPT hold no wallet and sign no
+USDC, so an in-connector 402 cannot be settled by a consumer host. x402 monetizes the
+**agent and CLI** surface, which is exactly where it is already deployed. For the connector
+surface, revenue has to ride on identity — which is what the AS decision above is really
+about.
 
 ## Not worth doing first
 
