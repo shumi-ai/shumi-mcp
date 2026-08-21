@@ -24,10 +24,18 @@ import { currentRequest } from './request-context.js';
  * a web form and has no shell to export anything into. currentRequest() is only
  * populated by the Streamable HTTP transport, so it doubles as the transport
  * discriminator.
+ *
+ * Remote callers are pointed at the HEADER, never at `?apiKey=`. The server
+ * still accepts the query form (see tokenFromConfig) because Smithery passes
+ * config that way, but it must not be recommended: the MCP authorization spec
+ * prohibits access tokens in the URI query string, and Anthropic's connector
+ * documentation calls a credential in a URL a security vulnerability, because
+ * URLs land in server logs, proxies and browser history. Claude's
+ * `static_headers` connector type exists for exactly this case.
  */
 function tokenAdvice() {
   return currentRequest()
-    ? 'Then add it to the connector URL as ?apiKey=<key>, or send it as an Authorization: Bearer header.'
+    ? 'Then send it as an Authorization: Bearer header — in Claude, add it under the connector\'s request-header setting. Do not put it in the URL: a credential in a query string leaks through logs and history.'
     : 'Then set it as the SHUMI_TOKEN environment variable.';
 }
 

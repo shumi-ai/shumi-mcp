@@ -138,8 +138,11 @@ test('remote callers are told about the URL/header, not an environment variable'
   // A Claude or ChatGPT connector user configures a URL in a web form and has no
   // shell to export SHUMI_TOKEN into.
   const remote = runWithRequest({ token: null }, () => authHint());
-  assert.match(remote, /connector URL as \?apiKey=|Authorization: Bearer/);
+  assert.match(remote, /Authorization: Bearer header/);
   assert.doesNotMatch(remote, /environment variable/);
+  // Never recommend the query form: the MCP authorization spec prohibits access
+  // tokens in the URI query string, and Anthropic documents it as a leak.
+  assert.doesNotMatch(remote, /\?apiKey=/);
   // stdio keeps the env-var advice, which is correct there.
   assert.match(authHint(), /SHUMI_TOKEN environment variable/);
 });
