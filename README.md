@@ -90,8 +90,39 @@ For a hosted, multi-user deployment:
 PORT=8787 SHUMI_MCP_ALLOWED_ORIGINS=https://yourapp.com npm run start:http
 ```
 
-Each request authenticates with its own `Authorization: Bearer shumi_sk_*` header; that token is
-forwarded to the upstream API per request. Endpoint: `POST /mcp`, health: `GET /health`.
+Each request authenticates with its own key header; that token is forwarded to the upstream API per
+request. Endpoint: `POST /mcp`, health: `GET /health`.
+
+### Connecting from Claude (`static_headers`)
+
+Claude supports a fixed credential entered as a request header, so no OAuth server is needed. In
+**Add custom connector → request headers**, an organisation administrator enters:
+
+| field | value |
+|---|---|
+| URL | `https://mcp.shumi.ai/mcp` |
+| Header name | `Authorization` |
+| Header value | `Bearer shumi_sk_…` |
+
+`x-api-key: shumi_sk_…` works too, and so does an `Authorization` value with the `Bearer ` prefix
+omitted — an admin types this once by hand, and a mistyped pair fails closed with no error they can
+see, so all three shapes are accepted. `x-api-key` wins if both are present, on the grounds that an
+admin who set it meant it.
+
+**Do not put the key in the URL.** The MCP authorization spec prohibits access tokens in the URI
+query string and Anthropic documents a credential in a URL as a security vulnerability — URLs land in
+server logs, proxies and browser history. The `?shumiToken=` / `?config=` query forms exist only
+because Smithery injects session config that way.
+
+One thing to know before buying for a team: a `static_headers` credential is **shared by the
+organisation, not per user**. Everyone connecting through that connector shares one Shumi account,
+one free-tier allowance and one quota. Per-user metering needs OAuth — see `docs/oauth-plan.md`.
+
+An unauthenticated call is answered with **`200` and an in-band `AUTH_REQUIRED` error, not `401`**.
+That is deliberate: Claude treats a `401` as the start of an OAuth flow, and a server with no
+authorization server behind it would send the client into a handshake that cannot complete. The
+`401` path exists but is gated behind `SHUMI_MCP_AUTH_SERVER`, so it lights up only once there is an
+authorization server to point at.
 
 **The server is stateless.** One endpoint serves both protocol revisions:
 

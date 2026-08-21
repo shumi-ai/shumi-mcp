@@ -3,6 +3,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createHandler, sessionStartProperties } from './mcp-handler.js';
 import { SERVER_VERSION } from './server.js';
 import { runWithRequest } from './request-context.js';
+import { resolveRequestToken } from './request-token.js';
 import { initTelemetry, capture, shutdownTelemetry } from './telemetry.js';
 import { primeFreeTier } from './free-tier.js';
 
@@ -67,33 +68,6 @@ function originAllowed(origin) {
   return ALLOWED_ORIGINS.includes(origin);
 }
 
-function bearerToken(req) {
-  const header = req.headers['authorization'] || '';
-  const match = /^Bearer\s+(.+)$/i.exec(header);
-  return match ? match[1].trim() : null;
-}
-
-// Smithery-hosted containers receive the user's session config as a base64-JSON
-// `config` query param (or flat query params), not an Authorization header. Map
-// the configured key to our bearer token so the SAME server works whether it's
-// our Render deploy (header auth) or Smithery-hosted (config injection).
-function tokenFromConfig(url) {
-  const cfg = url.searchParams.get('config');
-  if (cfg) {
-    try {
-      const obj = JSON.parse(Buffer.from(cfg, 'base64').toString('utf8'));
-      const t = obj.shumiToken || obj.apiKey || obj.token || obj.SHUMI_TOKEN;
-      if (t) return String(t);
-    } catch {
-      /* ignore malformed config */
-    }
-  }
-  return url.searchParams.get('shumiToken') || url.searchParams.get('api_key') || null;
-}
-
-function resolveRequestToken(req, url) {
-  return bearerToken(req) || tokenFromConfig(url);
-}
 
 // The handler can read the body itself, but then nothing bounds it. Read it
 // here to keep the 4 MB cap and hand the parsed value over as `parsedBody`.
