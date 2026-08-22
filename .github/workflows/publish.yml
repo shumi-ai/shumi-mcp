@@ -121,7 +121,7 @@ jobs:
       # a token, remove Trusted Publishing rather than running both.
       #
       # Requires a Trusted Publisher configured on npmjs.com for @shumi-ai/mcp:
-      # owner `mayrsascha`, repository `shumi-mcp`, workflow `publish.yml`. The
+      # owner `shumi-ai`, repository `shumi-mcp`, workflow `publish.yml`. The
       # workflow filename is part of the trust relationship — renaming this file
       # breaks publishing until the publisher entry is updated to match.
       - name: Publish to npm

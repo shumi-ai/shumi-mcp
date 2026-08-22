@@ -8,7 +8,7 @@
     "url": "https://shumi.ai"
   },
   "homepage": "https://docs.shumi.ai/agents/mcp",
-  "repository": "https://github.com/mayrsascha/shumi-mcp",
+  "repository": "https://github.com/shumi-ai/shumi-mcp",
   "license": "MIT",
   "keywords": [
     "crypto",

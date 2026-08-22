@@ -4,7 +4,7 @@
   "description": "Crypto market intelligence: prices, funding rates, narratives, regime, and delta-neutral research.",
   "version": "1.1.0",
   "repository": {
-    "url": "https://github.com/mayrsascha/shumi-mcp",
+    "url": "https://github.com/shumi-ai/shumi-mcp",
     "source": "github"
   },
   "websiteUrl": "https://shumi.ai",
