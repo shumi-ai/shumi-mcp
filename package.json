@@ -47,11 +47,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mayrsascha/shumi-mcp.git"
+    "url": "git+https://github.com/shumi-ai/shumi-mcp.git"
   },
   "homepage": "https://shumi.ai",
   "bugs": {
-    "url": "https://github.com/mayrsascha/shumi-mcp/issues"
+    "url": "https://github.com/shumi-ai/shumi-mcp/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/node": "^2.0.0",

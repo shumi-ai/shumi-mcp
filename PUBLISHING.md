@@ -14,7 +14,7 @@ threads through npm, `server.json`, and the registry.
 > account or DNS actions):
 >
 > 1. **npm Trusted Publisher** — on npmjs.com, open `@shumi-ai/mcp` → Settings →
->    Trusted Publishers, and add: owner `mayrsascha`, repository `shumi-mcp`,
+>    Trusted Publishers, and add: owner `shumi-ai`, repository `shumi-mcp`,
 >    workflow `publish.yml`. **There is no `NPM_TOKEN`.** The runner exchanges its
 >    OIDC token for short-lived publish rights, so nothing long-lived exists to
 >    leak, rotate, or expire — and npm is actively restricting the 2FA-bypass
@@ -48,17 +48,17 @@ threads through npm, `server.json`, and the registry.
 ## 0. Namespace + repo owner (decided)
 
 - Registry name: **`ai.shumi/mcp`**, verified by a **DNS TXT record on `shumi.ai`**.
-- Repo: **`github.com/mayrsascha/shumi-mcp`** (DNS verification decouples the name
+- Repo: **`github.com/shumi-ai/shumi-mcp`** (DNS verification decouples the name
   from the GitHub owner, so the repo can live under the current account).
 - `package.json` (`mcpName`) and `server.json` (`name`) are already set to
-  `ai.shumi/mcp`; both repository URLs point at `mayrsascha/shumi-mcp`.
+  `ai.shumi/mcp`; both repository URLs point at `shumi-ai/shumi-mcp`.
 
 ## 1. GitHub repo
 
 ```bash
-cd /Users/saschamayr/Projects/shumi-mcp
+cd ~/Projects/shumi-mcp
 git add -A && git commit -m "feat: Shumi MCP server (Phase 0 + Phase 1 artifacts)"
-gh repo create mayrsascha/shumi-mcp --public --source=. --remote=origin --push
+gh repo create shumi-ai/shumi-mcp --public --source=. --remote=origin --push
 ```
 
 ## 2. npm publish (`@shumi-ai/mcp`)
