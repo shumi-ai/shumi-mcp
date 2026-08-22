@@ -3,7 +3,10 @@
   "version": "1.1.0",
   "description": "Shumi crypto trade-intelligence MCP server \u2014 the market intelligence the shumi CLI provides, for any MCP client.",
   "type": "module",
-  "author": "pxeodev",
+  "author": {
+    "name": "Shumi",
+    "url": "https://shumi.ai"
+  },
   "mcpName": "ai.shumi/mcp",
   "bin": {
     "shumi-mcp": "bin/shumi-mcp.js"
