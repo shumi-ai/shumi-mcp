@@ -28,6 +28,12 @@ export const COIN_RISK_DESCRIPTION =
 // Permissive shared output schema. The server's `{ data, meta }` envelope is
 // always a JSON object, so this validates while we leave the inner data shape
 // open. Per-tool tightening is a fast-follow once we capture live payloads.
+/** The envelope, with `data` typed for the tools we have a verified shape for. */
+function outputSchemaFor(toolName) {
+  const dataSchema = DATA_SCHEMAS[toolName];
+  return dataSchema ? { ...SHARED_OUTPUT_SCHEMA, data: dataSchema } : SHARED_OUTPUT_SCHEMA;
+}
+
 const SHARED_OUTPUT_SCHEMA = {
   data: z.unknown().describe('The tool payload, unwrapped from the CLI envelope.'),
   meta: z.unknown().optional().describe('Envelope metadata. Carries `_truncated` when a list was abridged to fit the response budget.'),
@@ -444,6 +450,219 @@ export const TYPED_TOOLS = [
   // NOT exposed: /api/cli/watch/:stream. It is SSE, which does not fit MCP tool semantics.
 ];
 
+/**
+ * Per-tool shapes for the `data` field, so a client can see what a tool
+ * returns without calling it — which is most of the point of declaring an
+ * outputSchema at all. Tools absent from this map keep the untyped envelope.
+ *
+ * Every schema is permissive on purpose: all fields optional, objects `.loose()`.
+ * That is not laziness, it is a correctness requirement. The SDK validates
+ * structuredContent against outputSchema and throws a ProtocolError when it
+ * fails, so a schema that is too strict does not mis-describe a payload — it
+ * takes the whole tool down the first time upstream adds or nulls a field.
+ * `fields` and `top` also let a caller ask for a SUBSET of the payload, so
+ * required keys would break those callers by construction.
+ *
+ * Shapes were derived from a live sweep on a pro-tier account (2026-08-24);
+ * each entry records the command whose real response it came from.
+ */
+export const DATA_SCHEMAS = {
+  // verified against `shumi coin lookup BTC`
+  lookup_coin: z.object({
+    "coin": z.record(z.string(), z.unknown()).nullable().optional(),
+    "trends": z.array(z.unknown()).nullable().optional(),
+    "latestBands": z.record(z.string(), z.unknown()).nullable().optional(),
+    "band_position": z.record(z.string(), z.unknown()).nullable().optional(),
+    "average_streak": z.number().nullable().optional(),
+  }).loose(),
+  // verified against `shumi resolve wif`
+  resolve_coin: z.object({
+    "query": z.string().nullable().optional(),
+    "tried": z.array(z.unknown()).nullable().optional(),
+    "matches": z.array(z.unknown()).nullable().optional(),
+    "count": z.number().nullable().optional(),
+  }).loose(),
+  // verified against `shumi coin sentiment BTC`
+  get_coin_sentiment: z.object({
+    "success": z.boolean().nullable().optional(),
+    "symbol": z.string().nullable().optional(),
+    "data": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi coin historical BTC`
+  get_coin_historical: z.object({
+    "marketCap": z.unknown().optional(),
+    "volume": z.unknown().optional(),
+    "openInterest": z.string().nullable().optional(),
+    "fundingRate": z.string().nullable().optional(),
+    "futuresVolume24h": z.string().nullable().optional(),
+    "priceUSD": z.number().nullable().optional(),
+  }).loose(),
+  // verified against `shumi market health`
+  get_market_health: z.object({
+    "date": z.string().nullable().optional(),
+    "trends": z.record(z.string(), z.unknown()).nullable().optional(),
+    "hasExtremes": z.boolean().nullable().optional(),
+    "extremes": z.array(z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi market global`
+  get_global_market: z.object({
+    "totalMarketCap": z.record(z.string(), z.unknown()).nullable().optional(),
+    "totalMarketVolume": z.record(z.string(), z.unknown()).nullable().optional(),
+    "marketCapPercentage": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi market crossing`
+  get_market_crossing: z.object({
+    "crossings": z.array(z.unknown()).nullable().optional(),
+    "message": z.string().nullable().optional(),
+  }).loose(),
+  // verified against `shumi trends fresh`
+  scan_trends: z.array(z.unknown()),
+  // verified against `shumi scan`
+  scan_coins: z.array(z.unknown()),
+  // verified against `shumi sentiment latest`
+  get_market_sentiment: z.object({
+    "success": z.boolean().nullable().optional(),
+    "data": z.array(z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi narratives`
+  list_narratives: z.object({
+    "success": z.boolean().nullable().optional(),
+    "interval": z.string().nullable().optional(),
+    "periods_back": z.number().nullable().optional(),
+    "total_count": z.number().nullable().optional(),
+    "analysis_type": z.string().nullable().optional(),
+    "cache_age_minutes": z.unknown().optional(),
+    "freshness_config": z.record(z.string(), z.unknown()).nullable().optional(),
+    "surfaces": z.record(z.string(), z.unknown()).nullable().optional(),
+    "narratives": z.array(z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi category list`
+  list_categories: z.array(z.unknown()),
+  // verified against `shumi funding momentum`
+  get_funding_momentum: z.object({
+    "timestamp": z.string().nullable().optional(),
+    "market": z.record(z.string(), z.unknown()).nullable().optional(),
+    "distribution": z.record(z.string(), z.unknown()).nullable().optional(),
+    "assets": z.array(z.unknown()).nullable().optional(),
+    "meta": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi funding alerts`
+  get_funding_alerts: z.object({
+    "events": z.array(z.unknown()).nullable().optional(),
+    "meta": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi regime active`
+  get_regime: z.object({
+    "positions": z.array(z.unknown()).nullable().optional(),
+    "meta": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi signal BTC`
+  get_signal: z.object({
+    "symbol": z.string().nullable().optional(),
+    "verdict": z.string().nullable().optional(),
+    "score": z.number().nullable().optional(),
+    "confidence": z.string().nullable().optional(),
+    "as_of": z.string().nullable().optional(),
+    "evidence": z.array(z.unknown()).nullable().optional(),
+    "sources": z.record(z.string(), z.unknown()).nullable().optional(),
+    "raw": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi pairs suggestions`
+  get_pair_suggestions: z.object({
+    "suggestions": z.array(z.unknown()).nullable().optional(),
+    "timestamp": z.string().nullable().optional(),
+    "totalPairsAnalyzed": z.number().nullable().optional(),
+    "filters": z.record(z.string(), z.unknown()).nullable().optional(),
+    "algorithm": z.string().nullable().optional(),
+    "disclaimer": z.string().nullable().optional(),
+    "gateStats": z.record(z.string(), z.unknown()).nullable().optional(),
+    "concentrationWarnings": z.array(z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi holders watchlist`
+  get_holders: z.object({
+    "watchlist": z.array(z.unknown()).nullable().optional(),
+    "meta": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi wallets watchlist`
+  get_wallets: z.object({
+    "watchlist": z.array(z.unknown()).nullable().optional(),
+    "meta": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi futures state`
+  get_futures_signals: z.object({
+    "signals": z.array(z.unknown()).nullable().optional(),
+    "meta": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi basket`
+  get_basket: z.object({
+    "snapshots": z.array(z.unknown()).nullable().optional(),
+    "meta": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi transcripts sources`
+  get_transcripts: z.object({
+    "sources": z.array(z.unknown()).nullable().optional(),
+    "meta": z.record(z.string(), z.unknown()).nullable().optional(),
+  }).loose(),
+  // verified against `shumi coin risk BTC`. One row for a single symbol,
+  // an array when several were asked for — registerCoinRisk returns rows[0]
+  // only when there is exactly one.
+  get_coin_risk: z.union([
+  z.object({
+      "symbol": z.string().nullable().optional(),
+      "coin_id": z.string().nullable().optional(),
+      "price": z.number().nullable().optional(),
+      "price_source": z.string().nullable().optional(),
+      "price_as_of": z.string().nullable().optional(),
+      "funding_rate": z.number().nullable().optional(),
+      "funding_rate_unit": z.string().nullable().optional(),
+      "funding_interval_hours": z.number().nullable().optional(),
+      "funding_apr": z.number().nullable().optional(),
+      "funding_apr_unit": z.string().nullable().optional(),
+      "funding_scope": z.string().nullable().optional(),
+      "funding_paying_side": z.string().nullable().optional(),
+      "funding_receiving_side": z.string().nullable().optional(),
+      "carry_if_long": z.string().nullable().optional(),
+      "carry_if_short": z.string().nullable().optional(),
+      "funding_interpretation": z.string().nullable().optional(),
+      "trend_daily": z.string().nullable().optional(),
+      "trend_daily_since": z.string().nullable().optional(),
+      "trend_weekly": z.string().nullable().optional(),
+      "trend_weekly_since": z.string().nullable().optional(),
+      "sentiment_stance": z.string().nullable().optional(),
+      "sentiment_summary": z.string().nullable().optional(),
+      "btc_correlation": z.unknown().optional(),
+    }).loose(),
+    z.array(
+  z.object({
+      "symbol": z.string().nullable().optional(),
+      "coin_id": z.string().nullable().optional(),
+      "price": z.number().nullable().optional(),
+      "price_source": z.string().nullable().optional(),
+      "price_as_of": z.string().nullable().optional(),
+      "funding_rate": z.number().nullable().optional(),
+      "funding_rate_unit": z.string().nullable().optional(),
+      "funding_interval_hours": z.number().nullable().optional(),
+      "funding_apr": z.number().nullable().optional(),
+      "funding_apr_unit": z.string().nullable().optional(),
+      "funding_scope": z.string().nullable().optional(),
+      "funding_paying_side": z.string().nullable().optional(),
+      "funding_receiving_side": z.string().nullable().optional(),
+      "carry_if_long": z.string().nullable().optional(),
+      "carry_if_short": z.string().nullable().optional(),
+      "funding_interpretation": z.string().nullable().optional(),
+      "trend_daily": z.string().nullable().optional(),
+      "trend_daily_since": z.string().nullable().optional(),
+      "trend_weekly": z.string().nullable().optional(),
+      "trend_weekly_since": z.string().nullable().optional(),
+      "sentiment_stance": z.string().nullable().optional(),
+      "sentiment_summary": z.string().nullable().optional(),
+      "btc_correlation": z.unknown().optional(),
+    }).loose(),
+    ),
+  ]),
+
+};
+
 /** Register one typed tool. */
 function registerTyped(server, def) {
   const inputSchema = { ...def.inputSchema };
@@ -457,7 +676,7 @@ function registerTyped(server, def) {
       title: def.title,
       description: def.description,
       inputSchema,
-      outputSchema: SHARED_OUTPUT_SCHEMA,
+      outputSchema: outputSchemaFor(def.name),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async (args = {}) => {
@@ -502,7 +721,7 @@ function registerCoinRisk(server) {
           message: 'Provide between 1 and 15 symbols.',
         }).describe('Symbols as an array ["BTC","ETH","SOL"] or a comma-separated string "BTC,ETH,SOL". 1-15 of them.'),
       },
-      outputSchema: SHARED_OUTPUT_SCHEMA,
+      outputSchema: outputSchemaFor('get_coin_risk'),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ symbols }) => {

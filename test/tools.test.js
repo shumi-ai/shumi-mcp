@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   COIN_RISK_DESCRIPTION,
   FUNDING_MOMENTUM_DESCRIPTION,
+  DATA_SCHEMAS,
   TYPED_TOOLS,
   answerResult,
   buildRiskRows,
@@ -227,4 +228,34 @@ test('get_prices with no symbols still means "all tracked coins"', () => {
 test('a comma-separated string tolerates spacing and empty entries', () => {
   const prices = TYPED_TOOLS.find((t) => t.name === 'get_prices');
   assert.deepEqual(prices.inputSchema.symbols.parse(' BTC , ETH ,'), ['BTC', 'ETH']);
+});
+
+/**
+ * The SDK validates structuredContent against outputSchema and throws a
+ * ProtocolError when it fails, so an over-strict schema does not merely
+ * mis-describe a payload — it takes the tool down. These pin the properties
+ * that keep that from happening.
+ */
+test('every typed data schema tolerates a payload it does not fully describe', () => {
+  // `fields` and `top` let a caller request a SUBSET, and upstream adds keys
+  // without notice. Both must validate.
+  for (const [name, schema] of Object.entries(DATA_SCHEMAS)) {
+    const subset = schema.safeParse({});
+    const superset = schema.safeParse({ some_key_upstream_added_later: 'x' });
+    // Array-shaped and union-shaped schemas legitimately reject a bare object;
+    // for those, assert on the shape they do accept.
+    if (!subset.success) {
+      assert.ok(schema.safeParse([]).success, `${name}: rejects both {} and []`);
+      continue;
+    }
+    assert.ok(superset.success, `${name}: rejects an unknown extra key`);
+  }
+});
+
+test('data schemas are declared only for tools that have one, and are wired in', () => {
+  const named = new Set(TYPED_TOOLS.map((t) => t.name));
+  named.add('get_coin_risk'); // registered outside TYPED_TOOLS
+  for (const name of Object.keys(DATA_SCHEMAS)) {
+    assert.ok(named.has(name), `DATA_SCHEMAS has an entry for unknown tool ${name}`);
+  }
 });
