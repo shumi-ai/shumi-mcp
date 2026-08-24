@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { apiGet, askQuery, ApiError } from '../http-client.js';
 import { toMcpError } from '../errorMap.js';
-import { unwrap, applyFilters, result, safe } from './util.js';
+import { unwrap, applyFilters, result } from './util.js';
 
 /**
  * Tool registry for the Shumi MCP server. Each typed tool maps 1:1 to a
@@ -29,10 +29,23 @@ export const COIN_RISK_DESCRIPTION =
 // always a JSON object, so this validates while we leave the inner data shape
 // open. Per-tool tightening is a fast-follow once we capture live payloads.
 const SHARED_OUTPUT_SCHEMA = {
-  data: z.unknown().optional(),
-  meta: z.unknown().optional(),
-  error: z.unknown().optional(),
+  data: z.unknown().describe('The tool payload, unwrapped from the CLI envelope.'),
+  meta: z.unknown().optional().describe('Envelope metadata. Carries `_truncated` when a list was abridged to fit the response budget.'),
 };
+
+/**
+ * A list of coin symbols, accepted either as an array or as a comma-separated
+ * string, and normalised to an array.
+ *
+ * `get_coin_risk` took `symbols` as an array while `get_prices` took the same
+ * parameter name as a comma-separated string. A model that learned the shape
+ * from one tool sent it to the other and got a validation error, for a
+ * parameter meaning exactly the same thing in both. Rather than pick a winner
+ * and break whichever callers learned the other, both now accept both.
+ */
+const SYMBOL_LIST = z
+  .union([z.array(z.string().min(1)), z.string().min(1)])
+  .transform((v) => (Array.isArray(v) ? v : v.split(',').map((t) => t.trim()).filter(Boolean)));
 
 // The two NLP tools return prose, not an envelope, so SHARED_OUTPUT_SCHEMA does
 // not describe them. They shipped with no outputSchema at all, which left them
@@ -158,11 +171,16 @@ export const TYPED_TOOLS = [
     title: 'Bulk live prices',
     description: 'Bulk live prices, optionally with 4h/24h/7d baseline overlays. Omit symbols for the full tracked set.',
     inputSchema: {
-      symbols: z.string().optional().describe('Comma-separated symbols, e.g. "BTC,ETH,SOL". Omit for all tracked coins.'),
+      symbols: SYMBOL_LIST.optional().describe('Symbols as an array ["BTC","ETH"] or a comma-separated string "BTC,ETH". Omit for all tracked coins.'),
       baselines: z.boolean().optional().describe('Include 4h/24h/7d baseline price overlay.'),
     },
     listFilters: true,
-    build: ({ symbols, baselines }) => ({ route: 'market/prices', query: { symbols, ...(baselines ? { baselines: '1' } : {}) } }),
+    // The route takes a comma-separated string on the wire regardless of the
+    // shape the caller used.
+    build: ({ symbols, baselines }) => ({
+      route: 'market/prices',
+      query: { symbols: symbols?.length ? symbols.join(',') : undefined, ...(baselines ? { baselines: '1' } : {}) },
+    }),
   },
   {
     name: 'scan_trends',
@@ -453,7 +471,6 @@ function registerTyped(server, def) {
           data = applyFilters(data, { ...args, top });
         }
         return result(data, {
-          summary: def.summarize ? safe(def.summarize, data) : undefined,
           meta: env?.meta,
         });
       } catch (err) {
@@ -481,7 +498,9 @@ function registerCoinRisk(server) {
       title: 'Coin risk context',
       description: COIN_RISK_DESCRIPTION,
       inputSchema: {
-        symbols: z.array(z.string().min(1)).min(1).max(15).describe('One or more coin symbols, e.g. ["BTC","ETH","SOL"].'),
+        symbols: SYMBOL_LIST.refine((a) => a.length >= 1 && a.length <= 15, {
+          message: 'Provide between 1 and 15 symbols.',
+        }).describe('Symbols as an array ["BTC","ETH","SOL"] or a comma-separated string "BTC,ETH,SOL". 1-15 of them.'),
       },
       outputSchema: SHARED_OUTPUT_SCHEMA,
       annotations: { readOnlyHint: true, openWorldHint: true },
