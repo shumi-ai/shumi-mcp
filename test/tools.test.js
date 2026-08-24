@@ -198,3 +198,33 @@ test('answerResult always returns structuredContent, as the declared schema requ
     assert.ok(answerResult(res).structuredContent, `structuredContent missing for ${JSON.stringify(res)}`);
   }
 });
+
+/**
+ * `symbols` meant the same thing in get_coin_risk and get_prices but was typed
+ * differently in each — an array in one, a comma-separated string in the other.
+ * A model that learned the shape from one tool got a validation error from the
+ * other. Both accept both now; these pin that so the divergence cannot return.
+ */
+test('get_prices accepts symbols as an array and as a comma-separated string', () => {
+  const prices = TYPED_TOOLS.find((t) => t.name === 'get_prices');
+  const schema = prices.inputSchema.symbols;
+
+  const fromArray = schema.parse(['BTC', 'ETH']);
+  const fromString = schema.parse('BTC,ETH');
+  assert.deepEqual(fromArray, ['BTC', 'ETH']);
+  assert.deepEqual(fromString, ['BTC', 'ETH']);
+
+  // Whichever shape came in, the wire query is the comma-separated form.
+  assert.equal(prices.build({ symbols: fromArray }).query.symbols, 'BTC,ETH');
+  assert.equal(prices.build({ symbols: fromString }).query.symbols, 'BTC,ETH');
+});
+
+test('get_prices with no symbols still means "all tracked coins"', () => {
+  const prices = TYPED_TOOLS.find((t) => t.name === 'get_prices');
+  assert.equal(prices.build({}).query.symbols, undefined);
+});
+
+test('a comma-separated string tolerates spacing and empty entries', () => {
+  const prices = TYPED_TOOLS.find((t) => t.name === 'get_prices');
+  assert.deepEqual(prices.inputSchema.symbols.parse(' BTC , ETH ,'), ['BTC', 'ETH']);
+});
