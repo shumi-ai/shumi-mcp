@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { apiGet, askQuery, ApiError } from '../http-client.js';
 import { toMcpError } from '../errorMap.js';
 import { unwrap, applyFilters, result } from './util.js';
-import { KNOWN_EXCHANGES, canonicalExchange, categoryNames, closestNames, resolveName, rowsOf } from './scanResolve.js';
+import { canonicalCategory, canonicalExchange, rowsOf } from './scanResolve.js';
 
 /**
  * Tool registry for the Shumi MCP server. Each typed tool maps 1:1 to a
@@ -102,7 +102,7 @@ export const SCAN_COINS_DESCRIPTION =
   'and quote each row\'s change from the row itself (`change_24h_pct` / `change_7d_pct`, or `change24h` / `change7d`). With the default marketCap sort rows are plain coin names; ' +
   'a change sort may return `{ rows: [...] }` with a coverage summary instead of a bare list. ' +
   'category and exchange are matched by exact name: pass ONE category per call (e.g. "Meme", "Layer-2"; see list_categories), and exchanges by their full name (e.g. "Binance", "Coinbase Exchange"). ' +
-  'A near-miss category is resolved to its real name; an unknown one returns an error listing the closest names, not an empty list.';
+  'An empty result with a category or exchange set usually means the name was not exact; check it with list_categories before saying no coins match.';
 
 export const TYPED_TOOLS = [
   {
@@ -241,7 +241,7 @@ export const TYPED_TOOLS = [
       exchange: z
         .string()
         .optional()
-        .describe('Filter by exchange listing, full venue name, e.g. "Binance", "Coinbase Exchange", "OKX" ("Coinbase" is mapped for you).'),
+        .describe('Filter by exchange listing, full venue name, e.g. "Binance", "Coinbase Exchange", "OKX".'),
       interval: INTERVAL.optional(),
       limit: z.number().int().positive().max(200).optional().describe('Max results.'),
       sort_by: z
@@ -735,30 +735,14 @@ function badRequest(message) {
   return new ApiError(400, { error: { code: 'BAD_REQUEST', message } });
 }
 
-const CATEGORY_LIST_TTL_MS = 60 * 60 * 1000;
-let categoryListCache = null;
-
-/** Category names, cached for an hour: they change with the nightly job, not per call. */
-async function knownCategories(get) {
-  if (categoryListCache && Date.now() - categoryListCache.at < CATEGORY_LIST_TTL_MS) return categoryListCache.names;
-  const names = categoryNames(unwrap(await get('category/list', {})));
-  categoryListCache = { at: Date.now(), names };
-  return names;
-}
-
-/** Test seam: forget the cached category list. */
-export function resetCategoryCache() {
-  categoryListCache = null;
-}
-
-const list = (names) => names.map((n) => `"${n}"`).join(', ');
+export const EMPTY_SCAN_NOTE =
+  'No coins matched. Category names are exact and case-sensitive (e.g. "Meme", "Layer-2") — list_categories shows them; exchanges need the full venue name (e.g. "Coinbase Exchange").';
 
 /**
- * scan_coins with name resolution. The scan runs as asked; only when it comes back empty
- * with a category or exchange filter set is the filter checked, so a correct name costs
- * nothing extra. A category that differs only in case or punctuation ("meme", "Layer 2") is
- * resolved and the scan re-run; one that matches no known name, or several, becomes a tool
- * error naming the closest ones instead of an empty list the model would read as "no coins".
+ * scan_coins: exactly one backend call. Known misspellings of big categories and short venue
+ * names are rewritten locally first (static maps, no network). A comma-joined category is
+ * refused, since it is matched as one name and can only return nothing. An empty result with
+ * a category or exchange set comes back as the empty result plus a note, never as an error.
  */
 export async function runScan(args, get = apiGet) {
   const { category, exchange } = args;
@@ -766,40 +750,15 @@ export async function runScan(args, get = apiGet) {
     throw badRequest(`One category per call: "${category}" is matched as a single name and matches nothing. Call scan_coins once per category.`);
   }
   const notes = [];
+  const cat = category ? canonicalCategory(category) : undefined;
+  if (cat !== category) notes.push(`category "${category}" sent as "${cat}".`);
   const exch = exchange ? canonicalExchange(exchange) : undefined;
-  if (exch && exch !== exchange) notes.push(`exchange "${exchange}" matched as "${exch}"`);
+  if (exch !== exchange) notes.push(`exchange "${exchange}" sent as "${exch}".`);
 
-  const { route, query } = TYPED_TOOLS.find((t) => t.name === 'scan_coins').build({ ...args, exchange: exch });
-  let env = await get(route, query);
-  const done = () => ({ env, summary: notes.length ? `[${notes.join('; ')}]` : undefined });
-  if (rowsOf(unwrap(env)).length > 0 || (!category && !exch)) return done();
-
-  if (category) {
-    const r = resolveName(category, await knownCategories(get));
-    if (r.status === 'resolved') {
-      notes.push(`category "${category}" matched as "${r.name}"`);
-      env = await get(route, { ...query, categories: r.name });
-      if (rowsOf(unwrap(env)).length > 0) return done();
-    } else if (r.status === 'ambiguous') {
-      throw badRequest(`Category "${category}" matches several names: ${list(r.closest)}. Pass one of them exactly.`);
-    } else if (r.status === 'none') {
-      throw badRequest(
-        `No category named "${category}" (names are exact and case-sensitive, e.g. "Meme", "Layer-2").` +
-          (r.closest.length ? ` Closest: ${list(r.closest)}.` : '') +
-          ' list_categories returns the valid names.',
-      );
-    }
-  }
-
-  if (exch && !KNOWN_EXCHANGES.includes(exch)) {
-    const closest = closestNames(exch, KNOWN_EXCHANGES);
-    throw badRequest(
-      `No coins matched exchange "${exchange}". Exchanges are matched by their full venue name, e.g. "Binance", "Coinbase Exchange", "OKX".` +
-        (closest.length ? ` Closest known: ${list(closest)}.` : ''),
-    );
-  }
-  // The names are right; nothing matched the other filters.
-  return done();
+  const { route, query } = TYPED_TOOLS.find((t) => t.name === 'scan_coins').build({ ...args, category: cat, exchange: exch });
+  const env = await get(route, query);
+  if ((cat || exch) && rowsOf(unwrap(env)).length === 0) notes.push(EMPTY_SCAN_NOTE);
+  return { env, summary: notes.length ? `[${notes.join(' ')}]` : undefined };
 }
 
 /** Register one typed tool. */
