@@ -52,7 +52,7 @@ test('lookup_coin tells the model to read the current trend from currentTrend', 
   assert.match(t.description, /not from the last row of `trends`/);
 });
 
-test('scan_coins sends the parameter names /api/coins/filter actually reads', () => {
+test('scan_coins sends the parameter names /api/coins/filter actually reads, and exchange unmapped', () => {
   const t = byName('scan_coins');
   assert.deepEqual(
     t.build({ trend: 'UP', category: 'Layer 2', mcap_min: 1e6, mcap_max: 1e9, exchange: 'Binance', limit: 10 }).query,
@@ -61,7 +61,7 @@ test('scan_coins sends the parameter names /api/coins/filter actually reads', ()
       categories: 'Layer 2',
       marketCapMin: 1e6,
       marketCapMax: 1e9,
-      exchanges: 'Binance',
+      exchange: 'Binance',
       interval: undefined,
       limit: 10,
       sortBy: undefined,
