@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { apiGet, askQuery, ApiError } from '../http-client.js';
 import { toMcpError } from '../errorMap.js';
 import { unwrap, applyFilters, result } from './util.js';
-import { canonicalCategory, canonicalExchange, rowsOf } from './scanResolve.js';
+import { canonicalCategory, rowsOf } from './scanResolve.js';
 
 /**
  * Tool registry for the Shumi MCP server. Each typed tool maps 1:1 to a
@@ -97,12 +97,13 @@ export const LOOKUP_COIN_DESCRIPTION =
 export const SCAN_SORT_FIELDS = ['marketCap', 'change24h', 'change7d', 'streak', 'price'];
 
 export const SCAN_COINS_DESCRIPTION =
-  'Filter the tracked universe by trend direction, category, market-cap band, and exchange, and sort the result. ' +
+  'Filter the tracked universe by trend direction, category and market-cap band, and sort the result. ' +
   'For movers questions ("what\'s pumping", "top gainers/losers today", "biggest movers") use sort_by="change24h" ("change7d" for the week) — sort_order="desc" for gainers, "asc" for losers — ' +
   'and quote each row\'s change from the row itself (`change_24h_pct` / `change_7d_pct`, or `change24h` / `change7d`). With the default marketCap sort rows are plain coin names; ' +
   'a change sort may return `{ rows: [...] }` with a coverage summary instead of a bare list. ' +
-  'category and exchange are matched by exact name: pass ONE category per call (e.g. "Meme", "Layer-2"; see list_categories), and exchanges by their full name (e.g. "Binance", "Coinbase Exchange"). ' +
-  'An empty result with a category or exchange set usually means the name was not exact; check it with list_categories before saying no coins match.';
+  'Pass ONE category per call; the server ignores case and punctuation ("meme", "Layer 2" and "DeFi" all work) and rejects an unknown name with close matches (list_categories has the names). ' +
+  'There is no exchange filter yet: `exchange` is rejected with an explanation, because the only venue data behind this scan is spot listings. Do not present a scan as "coins on <exchange>". ' +
+  'An empty result means no coin matched all the filters.';
 
 export const TYPED_TOOLS = [
   {
@@ -235,13 +236,13 @@ export const TYPED_TOOLS = [
       category: z
         .string()
         .optional()
-        .describe('ONE category, by its exact name, e.g. "Meme" or "Layer-2" (list_categories has the names). Comma-joined values match nothing; call once per category.'),
+        .describe('ONE category, e.g. "Meme", "Layer 2" or "DeFi"; case and punctuation are ignored (list_categories has the names). Comma-joined values are rejected; call once per category.'),
       mcap_min: z.number().optional().describe('Minimum market cap in USD.'),
       mcap_max: z.number().optional().describe('Maximum market cap in USD.'),
       exchange: z
         .string()
         .optional()
-        .describe('Filter by exchange listing, full venue name, e.g. "Binance", "Coinbase Exchange", "OKX".'),
+        .describe('Not supported yet: the server rejects it with an explanation (its venue data covers spot listings only, so a filtered answer would mislead). Leave unset.'),
       interval: INTERVAL.optional(),
       limit: z.number().int().positive().max(200).optional().describe('Max results.'),
       sort_by: z
@@ -252,10 +253,16 @@ export const TYPED_TOOLS = [
     },
     listFilters: true,
     run: (args, get) => runScan(args, get),
-    // The upstream /api/coins/filter reads categories / marketCapMin / marketCapMax / exchanges /
-    // sortBy / sortOrder. It silently ignores unknown keys, so sending the old snake_case names
-    // meant the category, market-cap and exchange filters never applied (a scan with
-    // mcap_max=1000000 returned Bitcoin first).
+    // The upstream /api/coins/filter reads categories / marketCapMin / marketCapMax / sortBy /
+    // sortOrder. It silently ignores unknown keys, so sending the old snake_case names meant the
+    // category and market-cap filters never applied (a scan with mcap_max=1000000 returned
+    // Bitcoin first).
+    //
+    // `exchange` goes out as `exchange`, NOT `exchanges`. /api/cli/scan refuses `exchange` with an
+    // explanation (coinrotator-ai eaca92dd), because the upstream `exchanges` filter only matches
+    // spot-ticker venue names: "Hyperliquid" would return Hyperliquid spot listings only, and
+    // "coinbase" nothing, both presented as the answer. Sending `exchanges` skipped that refusal.
+    // The server owns the rule, so the value is passed through and its 400 becomes the tool error.
     build: ({ trend, category, mcap_min, mcap_max, exchange, interval, limit, sort_by, sort_order }) => ({
       route: 'scan',
       query: {
@@ -263,7 +270,7 @@ export const TYPED_TOOLS = [
         categories: category,
         marketCapMin: mcap_min,
         marketCapMax: mcap_max,
-        exchanges: exchange,
+        exchange,
         interval,
         limit,
         sortBy: sort_by,
@@ -736,28 +743,27 @@ function badRequest(message) {
 }
 
 export const EMPTY_SCAN_NOTE =
-  'No coins matched. Category names are exact and case-sensitive (e.g. "Meme", "Layer-2") — list_categories shows them; exchanges need the full venue name (e.g. "Coinbase Exchange").';
+  'No coins matched these filters. list_categories shows the valid category names.';
 
 /**
- * scan_coins: exactly one backend call. Known misspellings of big categories and short venue
- * names are rewritten locally first (static maps, no network). A comma-joined category is
- * refused, since it is matched as one name and can only return nothing. An empty result with
- * a category or exchange set comes back as the empty result plus a note, never as an error.
+ * scan_coins: exactly one backend call. The server resolves category spelling and answers an
+ * unknown name or an `exchange` with a 400, which becomes the tool error; the few synonyms it
+ * cannot resolve ("l2", "memecoin") are rewritten locally first. A comma-joined category is
+ * refused here, since the server reads it as one name. An empty result with a category set
+ * comes back as the empty result plus a note, never as an error.
  */
 export async function runScan(args, get = apiGet) {
-  const { category, exchange } = args;
+  const { category } = args;
   if (category && /[,;|]/.test(category)) {
     throw badRequest(`One category per call: "${category}" is matched as a single name and matches nothing. Call scan_coins once per category.`);
   }
   const notes = [];
   const cat = category ? canonicalCategory(category) : undefined;
   if (cat !== category) notes.push(`category "${category}" sent as "${cat}".`);
-  const exch = exchange ? canonicalExchange(exchange) : undefined;
-  if (exch !== exchange) notes.push(`exchange "${exchange}" sent as "${exch}".`);
 
-  const { route, query } = TYPED_TOOLS.find((t) => t.name === 'scan_coins').build({ ...args, category: cat, exchange: exch });
+  const { route, query } = TYPED_TOOLS.find((t) => t.name === 'scan_coins').build({ ...args, category: cat });
   const env = await get(route, query);
-  if ((cat || exch) && rowsOf(unwrap(env)).length === 0) notes.push(EMPTY_SCAN_NOTE);
+  if (cat && rowsOf(unwrap(env)).length === 0) notes.push(EMPTY_SCAN_NOTE);
   return { env, summary: notes.length ? `[${notes.join(' ')}]` : undefined };
 }
 

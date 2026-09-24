@@ -1,24 +1,33 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runScan, EMPTY_SCAN_NOTE, DATA_SCHEMAS, TYPED_TOOLS } from '../src/tools/index.js';
-import { canonicalCategory, canonicalExchange, rowsOf } from '../src/tools/scanResolve.js';
+import { canonicalCategory, rowsOf } from '../src/tools/scanResolve.js';
+import { ApiError } from '../src/http-client.js';
+import { toMcpError } from '../src/errorMap.js';
+
+const EXCHANGE_REFUSAL =
+  'The exchange filter is not available on scan yet. Filter the returned coins with `shumi coin risk` or the funding routes instead.';
 
 /**
- * A fake apiGet that behaves like /api/coins/filter: exact, case-sensitive category match,
- * case-insensitive exact exchange match. Records every call.
+ * A fake apiGet that behaves like /api/cli/scan since coinrotator-ai eaca92dd: refuses
+ * `exchange` with a 400, and matches categories ignoring case and punctuation. Records every
+ * call.
  */
+const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, '');
 function fakeApi({ coins, wrap = false } = {}) {
   const universe = coins ?? [
-    { name: 'Dogecoin', categories: ['Meme'], exchanges: ['Binance', 'Coinbase Exchange'] },
-    { name: 'Arbitrum', categories: ['Layer-2'], exchanges: ['Binance'] },
-    { name: 'Tiny', categories: ['Some Small Category'], exchanges: ['Some DEX (Base)'] },
+    { name: 'Dogecoin', categories: ['Meme'] },
+    { name: 'Arbitrum', categories: ['Layer-2'] },
+    { name: 'Tiny', categories: ['Some Small Category'] },
   ];
   const calls = [];
   const get = async (route, query = {}) => {
     calls.push({ route, query });
+    if (query.exchange !== undefined) {
+      throw new ApiError(400, { schemaVersion: 1, error: { code: 'BAD_REQUEST', message: EXCHANGE_REFUSAL } });
+    }
     const rows = universe
-      .filter((c) => !query.categories || c.categories.includes(query.categories))
-      .filter((c) => !query.exchanges || c.exchanges.some((e) => e.toLowerCase() === String(query.exchanges).toLowerCase()))
+      .filter((c) => !query.categories || c.categories.some((cat) => norm(cat) === norm(query.categories)))
       .map((c) => c.name);
     return { data: wrap ? { rows, coverage: { withChange: rows.length } } : rows };
   };
@@ -26,9 +35,9 @@ function fakeApi({ coins, wrap = false } = {}) {
 }
 
 test('every scan is exactly one backend call, and never a category/list lookup', async () => {
-  for (const args of [{ category: 'Meme' }, { category: 'meme' }, { category: 'Nope' }, { exchange: 'Krakenn' }, {}]) {
+  for (const args of [{ category: 'Meme' }, { category: 'meme' }, { category: 'Nope' }, { exchange: 'Hyperliquid' }, {}]) {
     const { get, calls } = fakeApi();
-    await runScan(args, get);
+    await runScan(args, get).catch(() => {});
     assert.equal(calls.length, 1, JSON.stringify(args));
     assert.equal(calls[0].route, 'scan');
   }
@@ -42,39 +51,57 @@ test('a correct category is sent unchanged with no note', async () => {
   assert.equal(summary, undefined);
 });
 
-test('known misspellings are rewritten locally before the one call', async () => {
-  for (const [asked, real, coin] of [['meme', 'Meme', 'Dogecoin'], ['Layer 2', 'Layer-2', 'Arbitrum'], ['layer-2', 'Layer-2', 'Arbitrum']]) {
+test('case and punctuation variants go out as typed: the server resolves them', async () => {
+  for (const [asked, coin] of [['meme', 'Dogecoin'], ['Layer 2', 'Arbitrum'], ['layer-2', 'Arbitrum']]) {
+    const { get, calls } = fakeApi();
+    const { env, summary } = await runScan({ category: asked }, get);
+    assert.equal(calls[0].query.categories, asked, asked);
+    assert.deepEqual(env.data, [coin]);
+    assert.equal(summary, undefined);
+  }
+});
+
+test('only synonyms the server cannot resolve are rewritten locally', async () => {
+  for (const [asked, real, coin] of [['l2', 'Layer-2', 'Arbitrum'], ['memecoins', 'Meme', 'Dogecoin']]) {
     const { get, calls } = fakeApi();
     const { env, summary } = await runScan({ category: asked }, get);
     assert.equal(calls[0].query.categories, real, asked);
     assert.deepEqual(env.data, [coin]);
     assert.match(summary, new RegExp(`"${asked}" sent as "${real}"`));
   }
-  const { get, calls } = fakeApi();
-  await runScan({ exchange: 'coinbase' }, get);
-  assert.equal(calls[0].query.exchanges, 'Coinbase Exchange');
 });
 
-test('an unknown or small category is sent as given, never rejected', async () => {
+test('an unknown or small category is sent as given', async () => {
   const { get, calls } = fakeApi();
   const { env } = await runScan({ category: 'Some Small Category' }, get);
   assert.equal(calls[0].query.categories, 'Some Small Category');
   assert.deepEqual(env.data, ['Tiny']);
-  const other = fakeApi();
-  const { env: env2 } = await runScan({ exchange: 'Some DEX (Base)' }, other.get);
-  assert.deepEqual(env2.data, ['Tiny']);
 });
 
-test('an empty result with a category or exchange set returns [] plus a note, not an error', async () => {
+test('exchange goes out as `exchange` (never `exchanges`) and the server refusal is the tool error', async () => {
+  const { get, calls } = fakeApi();
+  const err = await runScan({ exchange: 'Hyperliquid', trend: 'UP' }, get).then(() => null, (e) => e);
+  assert.ok(err instanceof ApiError);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].query.exchange, 'Hyperliquid');
+  assert.equal('exchanges' in calls[0].query, false);
+  const result = toMcpError(err);
+  assert.equal(result.isError, true);
+  const payload = JSON.parse(result.content[0].text);
+  assert.equal(payload.error.code, 'BAD_REQUEST');
+  assert.equal(payload.error.message, EXCHANGE_REFUSAL);
+});
+
+test('an empty result with a category set returns [] plus a note, not an error', async () => {
   const { get } = fakeApi();
   const { env, summary } = await runScan({ category: 'Layer Two' }, get);
   assert.deepEqual(env.data, []);
   assert.ok(summary.includes(EMPTY_SCAN_NOTE));
-  assert.match(EMPTY_SCAN_NOTE, /exact and case-sensitive/);
+  assert.doesNotMatch(EMPTY_SCAN_NOTE, /case-sensitive|exact/);
   assert.match(EMPTY_SCAN_NOTE, /list_categories/);
-  const ex = await runScan({ exchange: 'Krakenn' }, fakeApi().get);
-  assert.deepEqual(ex.env.data, []);
-  assert.ok(ex.summary.includes(EMPTY_SCAN_NOTE));
+  const filtered = await runScan({ category: 'Meme', trend: 'UP' }, fakeApi({ coins: [] }).get);
+  assert.deepEqual(filtered.env.data, []);
+  assert.ok(filtered.summary.includes(EMPTY_SCAN_NOTE));
   // No filter by name: an empty list needs no note.
   const plain = await runScan({ trend: 'UP' }, fakeApi({ coins: [] }).get);
   assert.equal(plain.summary, undefined);
@@ -97,19 +124,21 @@ test('the { rows } wrapper counts as rows, and validates against the output sche
   assert.deepEqual(rowsOf(null), []);
 });
 
-test('canonicalCategory / canonicalExchange only touch known spellings', () => {
-  assert.equal(canonicalCategory('MEME'), 'Meme');
+test('canonicalCategory only touches synonyms, leaving spelling to the server', () => {
+  assert.equal(canonicalCategory('L2'), 'Layer-2');
+  assert.equal(canonicalCategory('Memecoin'), 'Meme');
+  assert.equal(canonicalCategory('MEME'), 'MEME');
+  assert.equal(canonicalCategory('Layer 2'), 'Layer 2');
   assert.equal(canonicalCategory('Decentralized Finance (DeFi)'), 'Decentralized Finance (DeFi)');
-  assert.equal(canonicalExchange('Huobi'), 'HTX');
-  assert.equal(canonicalExchange('OKX'), 'OKX');
-  assert.equal(canonicalExchange('Uniswap V3 (Ethereum)'), 'Uniswap V3 (Ethereum)');
 });
 
-test('the scan_coins descriptions use real names and one category per call', () => {
+test('the scan_coins descriptions ask for one category and do not offer venue filtering', () => {
   const t = TYPED_TOOLS.find((d) => d.name === 'scan_coins');
-  assert.doesNotMatch(t.inputSchema.category.description, /"Layer 2"/);
   assert.match(t.inputSchema.category.description, /ONE category/);
-  assert.match(t.inputSchema.category.description, /"Layer-2"/);
-  assert.match(t.inputSchema.exchange.description, /"Coinbase Exchange"/);
+  assert.doesNotMatch(t.inputSchema.category.description, /exact name/);
+  assert.match(t.inputSchema.exchange.description, /Not supported yet/);
+  assert.doesNotMatch(t.inputSchema.exchange.description, /Coinbase Exchange|Binance/);
+  assert.doesNotMatch(t.description, /case-sensitive|full name/);
+  assert.match(t.description, /no exchange filter yet/);
   assert.match(t.description, /\{ rows: \[\.\.\.\] \}/);
 });
