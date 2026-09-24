@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { apiGet, askQuery, ApiError } from '../http-client.js';
 import { toMcpError } from '../errorMap.js';
 import { unwrap, applyFilters, result } from './util.js';
+import { canonicalCategory, canonicalExchange, rowsOf } from './scanResolve.js';
 
 /**
  * Tool registry for the Shumi MCP server. Each typed tool maps 1:1 to a
@@ -78,12 +79,36 @@ function answerResult(res) {
   return { content: [{ type: 'text', text: JSON.stringify(steps) }], structuredContent: { steps } };
 }
 
+/**
+ * The current trend lives in `currentTrend`, computed server-side from the last COMPLETE day.
+ * `trends` is the run history, and its last row used to be read as "the trend now" — which
+ * during the 00:20–01:30 UTC cron window was a half-written day. Older backends do not send
+ * `currentTrend`, hence the fallback sentence.
+ */
+export const LOOKUP_COIN_DESCRIPTION =
+  'Look up a single coin and its core metrics (price, trend, metadata) by symbol, name, CoinGecko/internal id, or on-chain contract address. ' +
+  'Read the coin\'s CURRENT trend from `currentTrend` ({ trend: UP|DOWN|HODL, since, days, asOf, incompleteDayExcluded }; `currentTrendWeekly` when present is the weekly one), not from the last row of `trends` — `trends` is the history of past trend runs. ' +
+  'Quote it as "<trend> since <since> (<days> days, as of <asOf>)". Only when `currentTrend` is absent, fall back to the last `trends` row.';
+
+/**
+ * `/api/coins/filter` sort keys. change24h / change7d answer movers questions ("what's pumping",
+ * "top gainers/losers today / this week").
+ */
+export const SCAN_SORT_FIELDS = ['marketCap', 'change24h', 'change7d', 'streak', 'price'];
+
+export const SCAN_COINS_DESCRIPTION =
+  'Filter the tracked universe by trend direction, category, market-cap band, and exchange, and sort the result. ' +
+  'For movers questions ("what\'s pumping", "top gainers/losers today", "biggest movers") use sort_by="change24h" ("change7d" for the week) — sort_order="desc" for gainers, "asc" for losers — ' +
+  'and quote each row\'s change from the row itself (`change_24h_pct` / `change_7d_pct`, or `change24h` / `change7d`). With the default marketCap sort rows are plain coin names; ' +
+  'a change sort may return `{ rows: [...] }` with a coverage summary instead of a bare list. ' +
+  'category and exchange are matched by exact name: pass ONE category per call (e.g. "Meme", "Layer-2"; see list_categories), and exchanges by their full name (e.g. "Binance", "Coinbase Exchange"). ' +
+  'An empty result with a category or exchange set usually means the name was not exact; check it with list_categories before saying no coins match.';
+
 export const TYPED_TOOLS = [
   {
     name: 'lookup_coin',
     title: 'Look up a coin',
-    description:
-      'Look up a single coin and its core metrics (price, trend, metadata) by symbol, name, CoinGecko/internal id, or on-chain contract address.',
+    description: LOOKUP_COIN_DESCRIPTION,
     inputSchema: {
       by: z.enum(['symbol', 'name', 'id', 'contract']).default('symbol').describe('How `identifier` is interpreted.'),
       identifier: z.string().min(1).describe('The symbol (BTC), name (Bitcoin), id (bitcoin), or contract address.'),
@@ -204,20 +229,46 @@ export const TYPED_TOOLS = [
   {
     name: 'scan_coins',
     title: 'Scan / filter coins',
-    description: 'Filter the tracked universe by trend direction, category, market-cap band, and exchange.',
+    description: SCAN_COINS_DESCRIPTION,
     inputSchema: {
       trend: z.enum(['UP', 'HODL', 'DOWN']).optional().describe('Filter by trend direction.'),
-      category: z.string().optional().describe('Filter by category name, e.g. "Layer 2".'),
+      category: z
+        .string()
+        .optional()
+        .describe('ONE category, by its exact name, e.g. "Meme" or "Layer-2" (list_categories has the names). Comma-joined values match nothing; call once per category.'),
       mcap_min: z.number().optional().describe('Minimum market cap in USD.'),
       mcap_max: z.number().optional().describe('Maximum market cap in USD.'),
-      exchange: z.string().optional().describe('Filter by exchange listing.'),
+      exchange: z
+        .string()
+        .optional()
+        .describe('Filter by exchange listing, full venue name, e.g. "Binance", "Coinbase Exchange", "OKX".'),
       interval: INTERVAL.optional(),
       limit: z.number().int().positive().max(200).optional().describe('Max results.'),
+      sort_by: z
+        .enum(SCAN_SORT_FIELDS)
+        .optional()
+        .describe('Sort key (default marketCap). change24h / change7d = 24h / 7d price change, for movers / "what\'s pumping" questions.'),
+      sort_order: z.enum(['asc', 'desc']).optional().describe('desc (default) = largest first; asc = smallest first (e.g. biggest 24h losers).'),
     },
     listFilters: true,
-    build: ({ trend, category, mcap_min, mcap_max, exchange, interval, limit }) => ({
+    run: (args, get) => runScan(args, get),
+    // The upstream /api/coins/filter reads categories / marketCapMin / marketCapMax / exchanges /
+    // sortBy / sortOrder. It silently ignores unknown keys, so sending the old snake_case names
+    // meant the category, market-cap and exchange filters never applied (a scan with
+    // mcap_max=1000000 returned Bitcoin first).
+    build: ({ trend, category, mcap_min, mcap_max, exchange, interval, limit, sort_by, sort_order }) => ({
       route: 'scan',
-      query: { trend, category, mcap_min, mcap_max, exchange, interval, limit },
+      query: {
+        trend,
+        categories: category,
+        marketCapMin: mcap_min,
+        marketCapMax: mcap_max,
+        exchanges: exchange,
+        interval,
+        limit,
+        sortBy: sort_by,
+        sortOrder: sort_order,
+      },
     }),
   },
   {
@@ -252,7 +303,7 @@ export const TYPED_TOOLS = [
   {
     name: 'list_categories',
     title: 'List categories',
-    description: 'List all tracked crypto categories (DeFi, Layer 2, memes, …).',
+    description: 'List tracked crypto categories by their exact names (e.g. "Meme", "Layer-2"), the names scan_coins expects.',
     inputSchema: {},
     listFilters: true,
     build: () => ({ route: 'category/list' }),
@@ -466,6 +517,15 @@ export const TYPED_TOOLS = [
  * Shapes were derived from a live sweep on a pro-tier account (2026-08-24);
  * each entry records the command whose real response it came from.
  */
+const CURRENT_TREND = z.object({
+  "trend": z.string().nullable().optional(),
+  "since": z.string().nullable().optional(),
+  "days": z.number().nullable().optional(),
+  "asOf": z.string().nullable().optional(),
+  "weeks": z.number().nullable().optional(),
+  "incompleteDayExcluded": z.boolean().nullable().optional(),
+}).loose();
+
 export const DATA_SCHEMAS = {
   // verified against `shumi coin lookup BTC`
   lookup_coin: z.object({
@@ -474,6 +534,10 @@ export const DATA_SCHEMAS = {
     "latestBands": z.record(z.string(), z.unknown()).nullable().optional(),
     "band_position": z.record(z.string(), z.unknown()).nullable().optional(),
     "average_streak": z.number().nullable().optional(),
+    // Added by coinrotator-ai (epic movers-and-current-trend). Optional so an older backend
+    // that does not send it still validates.
+    "currentTrend": CURRENT_TREND.nullable().optional(),
+    "currentTrendWeekly": CURRENT_TREND.nullable().optional(),
   }).loose(),
   // verified against `shumi resolve wif`
   resolve_coin: z.object({
@@ -517,8 +581,12 @@ export const DATA_SCHEMAS = {
   }).loose(),
   // verified against `shumi trends fresh`
   scan_trends: z.array(z.unknown()),
-  // verified against `shumi scan`
-  scan_coins: z.array(z.unknown()),
+  // verified against `shumi scan`. coinrotator-ai#378 may wrap change-sort rows with a
+  // coverage summary as { rows: [...] }; both shapes must validate or the tool goes down.
+  scan_coins: z.union([
+    z.array(z.unknown()),
+    z.object({ "rows": z.array(z.unknown()).nullable().optional() }).loose(),
+  ]),
   // verified against `shumi sentiment latest`
   get_market_sentiment: z.object({
     "success": z.boolean().nullable().optional(),
@@ -663,6 +731,36 @@ export const DATA_SCHEMAS = {
 
 };
 
+function badRequest(message) {
+  return new ApiError(400, { error: { code: 'BAD_REQUEST', message } });
+}
+
+export const EMPTY_SCAN_NOTE =
+  'No coins matched. Category names are exact and case-sensitive (e.g. "Meme", "Layer-2") — list_categories shows them; exchanges need the full venue name (e.g. "Coinbase Exchange").';
+
+/**
+ * scan_coins: exactly one backend call. Known misspellings of big categories and short venue
+ * names are rewritten locally first (static maps, no network). A comma-joined category is
+ * refused, since it is matched as one name and can only return nothing. An empty result with
+ * a category or exchange set comes back as the empty result plus a note, never as an error.
+ */
+export async function runScan(args, get = apiGet) {
+  const { category, exchange } = args;
+  if (category && /[,;|]/.test(category)) {
+    throw badRequest(`One category per call: "${category}" is matched as a single name and matches nothing. Call scan_coins once per category.`);
+  }
+  const notes = [];
+  const cat = category ? canonicalCategory(category) : undefined;
+  if (cat !== category) notes.push(`category "${category}" sent as "${cat}".`);
+  const exch = exchange ? canonicalExchange(exchange) : undefined;
+  if (exch !== exchange) notes.push(`exchange "${exchange}" sent as "${exch}".`);
+
+  const { route, query } = TYPED_TOOLS.find((t) => t.name === 'scan_coins').build({ ...args, category: cat, exchange: exch });
+  const env = await get(route, query);
+  if ((cat || exch) && rowsOf(unwrap(env)).length === 0) notes.push(EMPTY_SCAN_NOTE);
+  return { env, summary: notes.length ? `[${notes.join(' ')}]` : undefined };
+}
+
 /** Register one typed tool. */
 function registerTyped(server, def) {
   const inputSchema = { ...def.inputSchema };
@@ -681,8 +779,14 @@ function registerTyped(server, def) {
     },
     async (args = {}) => {
       try {
-        const { route, query } = def.build(args);
-        const env = await apiGet(route, query || {});
+        let env;
+        let summary;
+        if (def.run) {
+          ({ env, summary } = await def.run(args, apiGet));
+        } else {
+          const { route, query } = def.build(args);
+          env = await apiGet(route, query || {});
+        }
         let data = unwrap(env);
         if (def.listFilters) {
           // Apply the caller's filters, but default-cap when they didn't set `top`.
@@ -690,6 +794,7 @@ function registerTyped(server, def) {
           data = applyFilters(data, { ...args, top });
         }
         return result(data, {
+          summary,
           meta: env?.meta,
         });
       } catch (err) {
