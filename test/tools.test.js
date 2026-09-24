@@ -75,7 +75,7 @@ test('scan_coins can sort by 24h change for movers questions', () => {
   const q = t.build({ sort_by: 'change24h', sort_order: 'asc', limit: 10 }).query;
   assert.equal(q.sortBy, 'change24h');
   assert.equal(q.sortOrder, 'asc');
-  for (const v of ['marketCap', 'change24h', 'streak', 'price']) assert.ok(t.inputSchema.sort_by.safeParse(v).success, v);
+  for (const v of ['marketCap', 'change24h', 'change7d', 'streak', 'price']) assert.ok(t.inputSchema.sort_by.safeParse(v).success, v);
   assert.equal(t.inputSchema.sort_by.safeParse('volume').success, false);
   assert.equal(t.description, SCAN_COINS_DESCRIPTION);
   assert.match(t.description, /movers/);

@@ -90,15 +90,15 @@ export const LOOKUP_COIN_DESCRIPTION =
   'Quote it as "<trend> since <since> (<days> days, as of <asOf>)". Only when `currentTrend` is absent, fall back to the last `trends` row.';
 
 /**
- * `/api/coins/filter` sort keys. change24h is what answers movers questions ("what's pumping",
- * "top gainers/losers today"); the rest predate it.
+ * `/api/coins/filter` sort keys. change24h / change7d answer movers questions ("what's pumping",
+ * "top gainers/losers today / this week").
  */
-export const SCAN_SORT_FIELDS = ['marketCap', 'change24h', 'streak', 'price'];
+export const SCAN_SORT_FIELDS = ['marketCap', 'change24h', 'change7d', 'streak', 'price'];
 
 export const SCAN_COINS_DESCRIPTION =
   'Filter the tracked universe by trend direction, category, market-cap band, and exchange, and sort the result. ' +
-  'For movers questions ("what\'s pumping", "top gainers/losers today", "biggest movers") use sort_by="change24h" — sort_order="desc" for gainers, "asc" for losers — ' +
-  'and read each row\'s 24h change from the row itself (`change24h` or `change_24h_pct`). Rows may be plain coin names when not sorted by change24h.';
+  'For movers questions ("what\'s pumping", "top gainers/losers today", "biggest movers") use sort_by="change24h" ("change7d" for the week) — sort_order="desc" for gainers, "asc" for losers — ' +
+  'and quote each row\'s change from the row itself (`change_24h_pct` / `change_7d_pct`, or `change24h` / `change7d`). With the default marketCap sort rows are plain coin names.';
 
 export const TYPED_TOOLS = [
   {
@@ -237,7 +237,7 @@ export const TYPED_TOOLS = [
       sort_by: z
         .enum(SCAN_SORT_FIELDS)
         .optional()
-        .describe('Sort key (default marketCap). change24h = 24h price change, the one to use for movers / "what\'s pumping" questions.'),
+        .describe('Sort key (default marketCap). change24h / change7d = 24h / 7d price change, for movers / "what\'s pumping" questions.'),
       sort_order: z.enum(['asc', 'desc']).optional().describe('desc (default) = largest first; asc = smallest first (e.g. biggest 24h losers).'),
     },
     listFilters: true,
@@ -511,6 +511,7 @@ const CURRENT_TREND = z.object({
   "since": z.string().nullable().optional(),
   "days": z.number().nullable().optional(),
   "asOf": z.string().nullable().optional(),
+  "weeks": z.number().nullable().optional(),
   "incompleteDayExcluded": z.boolean().nullable().optional(),
 }).loose();
 
