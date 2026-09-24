@@ -4,6 +4,8 @@ import {
   COIN_RISK_DESCRIPTION,
   FUNDING_MOMENTUM_DESCRIPTION,
   DATA_SCHEMAS,
+  LOOKUP_COIN_DESCRIPTION,
+  SCAN_COINS_DESCRIPTION,
   TYPED_TOOLS,
   answerResult,
   buildRiskRows,
@@ -32,6 +34,52 @@ test('lookup_coin routes by identifier kind', () => {
 test('lookup_coin requires chain for contract lookups', () => {
   const t = byName('lookup_coin');
   assert.throws(() => t.build({ by: 'contract', identifier: '0xabc' }), /chain is required/);
+});
+
+test('lookup_coin keeps currentTrend instead of dropping it', () => {
+  const currentTrend = { trend: 'HODL', since: '2026-09-19', days: 5, asOf: '2026-09-23', incompleteDayExcluded: true };
+  const parsed = DATA_SCHEMAS.lookup_coin.parse({ coin: { id: 'bitcoin' }, trends: [], currentTrend, currentTrendWeekly: null });
+  assert.deepEqual(parsed.currentTrend, currentTrend);
+  assert.equal(parsed.currentTrendWeekly, null);
+  // An older backend sends no currentTrend at all; that must still validate.
+  assert.ok(DATA_SCHEMAS.lookup_coin.safeParse({ coin: { id: 'bitcoin' }, trends: [] }).success);
+});
+
+test('lookup_coin tells the model to read the current trend from currentTrend', () => {
+  const t = byName('lookup_coin');
+  assert.equal(t.description, LOOKUP_COIN_DESCRIPTION);
+  assert.match(t.description, /CURRENT trend from `currentTrend`/);
+  assert.match(t.description, /not from the last row of `trends`/);
+});
+
+test('scan_coins sends the parameter names /api/coins/filter actually reads', () => {
+  const t = byName('scan_coins');
+  assert.deepEqual(
+    t.build({ trend: 'UP', category: 'Layer 2', mcap_min: 1e6, mcap_max: 1e9, exchange: 'Binance', limit: 10 }).query,
+    {
+      trend: 'UP',
+      categories: 'Layer 2',
+      marketCapMin: 1e6,
+      marketCapMax: 1e9,
+      exchanges: 'Binance',
+      interval: undefined,
+      limit: 10,
+      sortBy: undefined,
+      sortOrder: undefined,
+    },
+  );
+});
+
+test('scan_coins can sort by 24h change for movers questions', () => {
+  const t = byName('scan_coins');
+  const q = t.build({ sort_by: 'change24h', sort_order: 'asc', limit: 10 }).query;
+  assert.equal(q.sortBy, 'change24h');
+  assert.equal(q.sortOrder, 'asc');
+  for (const v of ['marketCap', 'change24h', 'streak', 'price']) assert.ok(t.inputSchema.sort_by.safeParse(v).success, v);
+  assert.equal(t.inputSchema.sort_by.safeParse('volume').success, false);
+  assert.equal(t.description, SCAN_COINS_DESCRIPTION);
+  assert.match(t.description, /movers/);
+  assert.match(t.description, /sort_by="change24h"/);
 });
 
 test('scan_trends maps state -> action', () => {

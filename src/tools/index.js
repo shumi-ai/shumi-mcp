@@ -78,12 +78,33 @@ function answerResult(res) {
   return { content: [{ type: 'text', text: JSON.stringify(steps) }], structuredContent: { steps } };
 }
 
+/**
+ * The current trend lives in `currentTrend`, computed server-side from the last COMPLETE day.
+ * `trends` is the run history, and its last row used to be read as "the trend now" — which
+ * during the 00:20–01:30 UTC cron window was a half-written day. Older backends do not send
+ * `currentTrend`, hence the fallback sentence.
+ */
+export const LOOKUP_COIN_DESCRIPTION =
+  'Look up a single coin and its core metrics (price, trend, metadata) by symbol, name, CoinGecko/internal id, or on-chain contract address. ' +
+  'Read the coin\'s CURRENT trend from `currentTrend` ({ trend: UP|DOWN|HODL, since, days, asOf, incompleteDayExcluded }; `currentTrendWeekly` when present is the weekly one), not from the last row of `trends` — `trends` is the history of past trend runs. ' +
+  'Quote it as "<trend> since <since> (<days> days, as of <asOf>)". Only when `currentTrend` is absent, fall back to the last `trends` row.';
+
+/**
+ * `/api/coins/filter` sort keys. change24h is what answers movers questions ("what's pumping",
+ * "top gainers/losers today"); the rest predate it.
+ */
+export const SCAN_SORT_FIELDS = ['marketCap', 'change24h', 'streak', 'price'];
+
+export const SCAN_COINS_DESCRIPTION =
+  'Filter the tracked universe by trend direction, category, market-cap band, and exchange, and sort the result. ' +
+  'For movers questions ("what\'s pumping", "top gainers/losers today", "biggest movers") use sort_by="change24h" — sort_order="desc" for gainers, "asc" for losers — ' +
+  'and read each row\'s 24h change from the row itself (`change24h` or `change_24h_pct`). Rows may be plain coin names when not sorted by change24h.';
+
 export const TYPED_TOOLS = [
   {
     name: 'lookup_coin',
     title: 'Look up a coin',
-    description:
-      'Look up a single coin and its core metrics (price, trend, metadata) by symbol, name, CoinGecko/internal id, or on-chain contract address.',
+    description: LOOKUP_COIN_DESCRIPTION,
     inputSchema: {
       by: z.enum(['symbol', 'name', 'id', 'contract']).default('symbol').describe('How `identifier` is interpreted.'),
       identifier: z.string().min(1).describe('The symbol (BTC), name (Bitcoin), id (bitcoin), or contract address.'),
@@ -204,7 +225,7 @@ export const TYPED_TOOLS = [
   {
     name: 'scan_coins',
     title: 'Scan / filter coins',
-    description: 'Filter the tracked universe by trend direction, category, market-cap band, and exchange.',
+    description: SCAN_COINS_DESCRIPTION,
     inputSchema: {
       trend: z.enum(['UP', 'HODL', 'DOWN']).optional().describe('Filter by trend direction.'),
       category: z.string().optional().describe('Filter by category name, e.g. "Layer 2".'),
@@ -213,11 +234,30 @@ export const TYPED_TOOLS = [
       exchange: z.string().optional().describe('Filter by exchange listing.'),
       interval: INTERVAL.optional(),
       limit: z.number().int().positive().max(200).optional().describe('Max results.'),
+      sort_by: z
+        .enum(SCAN_SORT_FIELDS)
+        .optional()
+        .describe('Sort key (default marketCap). change24h = 24h price change, the one to use for movers / "what\'s pumping" questions.'),
+      sort_order: z.enum(['asc', 'desc']).optional().describe('desc (default) = largest first; asc = smallest first (e.g. biggest 24h losers).'),
     },
     listFilters: true,
-    build: ({ trend, category, mcap_min, mcap_max, exchange, interval, limit }) => ({
+    // The upstream /api/coins/filter reads categories / marketCapMin / marketCapMax / exchanges /
+    // sortBy / sortOrder. It silently ignores unknown keys, so sending the old snake_case names
+    // meant the category, market-cap and exchange filters never applied (a scan with
+    // mcap_max=1000000 returned Bitcoin first).
+    build: ({ trend, category, mcap_min, mcap_max, exchange, interval, limit, sort_by, sort_order }) => ({
       route: 'scan',
-      query: { trend, category, mcap_min, mcap_max, exchange, interval, limit },
+      query: {
+        trend,
+        categories: category,
+        marketCapMin: mcap_min,
+        marketCapMax: mcap_max,
+        exchanges: exchange,
+        interval,
+        limit,
+        sortBy: sort_by,
+        sortOrder: sort_order,
+      },
     }),
   },
   {
@@ -466,6 +506,14 @@ export const TYPED_TOOLS = [
  * Shapes were derived from a live sweep on a pro-tier account (2026-08-24);
  * each entry records the command whose real response it came from.
  */
+const CURRENT_TREND = z.object({
+  "trend": z.string().nullable().optional(),
+  "since": z.string().nullable().optional(),
+  "days": z.number().nullable().optional(),
+  "asOf": z.string().nullable().optional(),
+  "incompleteDayExcluded": z.boolean().nullable().optional(),
+}).loose();
+
 export const DATA_SCHEMAS = {
   // verified against `shumi coin lookup BTC`
   lookup_coin: z.object({
@@ -474,6 +522,10 @@ export const DATA_SCHEMAS = {
     "latestBands": z.record(z.string(), z.unknown()).nullable().optional(),
     "band_position": z.record(z.string(), z.unknown()).nullable().optional(),
     "average_streak": z.number().nullable().optional(),
+    // Added by coinrotator-ai (epic movers-and-current-trend). Optional so an older backend
+    // that does not send it still validates.
+    "currentTrend": CURRENT_TREND.nullable().optional(),
+    "currentTrendWeekly": CURRENT_TREND.nullable().optional(),
   }).loose(),
   // verified against `shumi resolve wif`
   resolve_coin: z.object({
