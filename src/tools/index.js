@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { apiGet, askQuery, ApiError } from '../http-client.js';
 import { toMcpError } from '../errorMap.js';
 import { unwrap, applyFilters, result } from './util.js';
+import { KNOWN_EXCHANGES, canonicalExchange, categoryNames, closestNames, resolveName, rowsOf } from './scanResolve.js';
 
 /**
  * Tool registry for the Shumi MCP server. Each typed tool maps 1:1 to a
@@ -98,7 +99,10 @@ export const SCAN_SORT_FIELDS = ['marketCap', 'change24h', 'change7d', 'streak',
 export const SCAN_COINS_DESCRIPTION =
   'Filter the tracked universe by trend direction, category, market-cap band, and exchange, and sort the result. ' +
   'For movers questions ("what\'s pumping", "top gainers/losers today", "biggest movers") use sort_by="change24h" ("change7d" for the week) — sort_order="desc" for gainers, "asc" for losers — ' +
-  'and quote each row\'s change from the row itself (`change_24h_pct` / `change_7d_pct`, or `change24h` / `change7d`). With the default marketCap sort rows are plain coin names.';
+  'and quote each row\'s change from the row itself (`change_24h_pct` / `change_7d_pct`, or `change24h` / `change7d`). With the default marketCap sort rows are plain coin names; ' +
+  'a change sort may return `{ rows: [...] }` with a coverage summary instead of a bare list. ' +
+  'category and exchange are matched by exact name: pass ONE category per call (e.g. "Meme", "Layer-2"; see list_categories), and exchanges by their full name (e.g. "Binance", "Coinbase Exchange"). ' +
+  'A near-miss category is resolved to its real name; an unknown one returns an error listing the closest names, not an empty list.';
 
 export const TYPED_TOOLS = [
   {
@@ -228,10 +232,16 @@ export const TYPED_TOOLS = [
     description: SCAN_COINS_DESCRIPTION,
     inputSchema: {
       trend: z.enum(['UP', 'HODL', 'DOWN']).optional().describe('Filter by trend direction.'),
-      category: z.string().optional().describe('Filter by category name, e.g. "Layer 2".'),
+      category: z
+        .string()
+        .optional()
+        .describe('ONE category, by its exact name, e.g. "Meme" or "Layer-2" (list_categories has the names). Comma-joined values match nothing; call once per category.'),
       mcap_min: z.number().optional().describe('Minimum market cap in USD.'),
       mcap_max: z.number().optional().describe('Maximum market cap in USD.'),
-      exchange: z.string().optional().describe('Filter by exchange listing.'),
+      exchange: z
+        .string()
+        .optional()
+        .describe('Filter by exchange listing, full venue name, e.g. "Binance", "Coinbase Exchange", "OKX" ("Coinbase" is mapped for you).'),
       interval: INTERVAL.optional(),
       limit: z.number().int().positive().max(200).optional().describe('Max results.'),
       sort_by: z
@@ -241,6 +251,7 @@ export const TYPED_TOOLS = [
       sort_order: z.enum(['asc', 'desc']).optional().describe('desc (default) = largest first; asc = smallest first (e.g. biggest 24h losers).'),
     },
     listFilters: true,
+    run: (args, get) => runScan(args, get),
     // The upstream /api/coins/filter reads categories / marketCapMin / marketCapMax / exchanges /
     // sortBy / sortOrder. It silently ignores unknown keys, so sending the old snake_case names
     // meant the category, market-cap and exchange filters never applied (a scan with
@@ -292,7 +303,7 @@ export const TYPED_TOOLS = [
   {
     name: 'list_categories',
     title: 'List categories',
-    description: 'List all tracked crypto categories (DeFi, Layer 2, memes, …).',
+    description: 'List tracked crypto categories by their exact names (e.g. "Meme", "Layer-2"), the names scan_coins expects.',
     inputSchema: {},
     listFilters: true,
     build: () => ({ route: 'category/list' }),
@@ -570,8 +581,12 @@ export const DATA_SCHEMAS = {
   }).loose(),
   // verified against `shumi trends fresh`
   scan_trends: z.array(z.unknown()),
-  // verified against `shumi scan`
-  scan_coins: z.array(z.unknown()),
+  // verified against `shumi scan`. coinrotator-ai#378 may wrap change-sort rows with a
+  // coverage summary as { rows: [...] }; both shapes must validate or the tool goes down.
+  scan_coins: z.union([
+    z.array(z.unknown()),
+    z.object({ "rows": z.array(z.unknown()).nullable().optional() }).loose(),
+  ]),
   // verified against `shumi sentiment latest`
   get_market_sentiment: z.object({
     "success": z.boolean().nullable().optional(),
@@ -716,6 +731,77 @@ export const DATA_SCHEMAS = {
 
 };
 
+function badRequest(message) {
+  return new ApiError(400, { error: { code: 'BAD_REQUEST', message } });
+}
+
+const CATEGORY_LIST_TTL_MS = 60 * 60 * 1000;
+let categoryListCache = null;
+
+/** Category names, cached for an hour: they change with the nightly job, not per call. */
+async function knownCategories(get) {
+  if (categoryListCache && Date.now() - categoryListCache.at < CATEGORY_LIST_TTL_MS) return categoryListCache.names;
+  const names = categoryNames(unwrap(await get('category/list', {})));
+  categoryListCache = { at: Date.now(), names };
+  return names;
+}
+
+/** Test seam: forget the cached category list. */
+export function resetCategoryCache() {
+  categoryListCache = null;
+}
+
+const list = (names) => names.map((n) => `"${n}"`).join(', ');
+
+/**
+ * scan_coins with name resolution. The scan runs as asked; only when it comes back empty
+ * with a category or exchange filter set is the filter checked, so a correct name costs
+ * nothing extra. A category that differs only in case or punctuation ("meme", "Layer 2") is
+ * resolved and the scan re-run; one that matches no known name, or several, becomes a tool
+ * error naming the closest ones instead of an empty list the model would read as "no coins".
+ */
+export async function runScan(args, get = apiGet) {
+  const { category, exchange } = args;
+  if (category && /[,;|]/.test(category)) {
+    throw badRequest(`One category per call: "${category}" is matched as a single name and matches nothing. Call scan_coins once per category.`);
+  }
+  const notes = [];
+  const exch = exchange ? canonicalExchange(exchange) : undefined;
+  if (exch && exch !== exchange) notes.push(`exchange "${exchange}" matched as "${exch}"`);
+
+  const { route, query } = TYPED_TOOLS.find((t) => t.name === 'scan_coins').build({ ...args, exchange: exch });
+  let env = await get(route, query);
+  const done = () => ({ env, summary: notes.length ? `[${notes.join('; ')}]` : undefined });
+  if (rowsOf(unwrap(env)).length > 0 || (!category && !exch)) return done();
+
+  if (category) {
+    const r = resolveName(category, await knownCategories(get));
+    if (r.status === 'resolved') {
+      notes.push(`category "${category}" matched as "${r.name}"`);
+      env = await get(route, { ...query, categories: r.name });
+      if (rowsOf(unwrap(env)).length > 0) return done();
+    } else if (r.status === 'ambiguous') {
+      throw badRequest(`Category "${category}" matches several names: ${list(r.closest)}. Pass one of them exactly.`);
+    } else if (r.status === 'none') {
+      throw badRequest(
+        `No category named "${category}" (names are exact and case-sensitive, e.g. "Meme", "Layer-2").` +
+          (r.closest.length ? ` Closest: ${list(r.closest)}.` : '') +
+          ' list_categories returns the valid names.',
+      );
+    }
+  }
+
+  if (exch && !KNOWN_EXCHANGES.includes(exch)) {
+    const closest = closestNames(exch, KNOWN_EXCHANGES);
+    throw badRequest(
+      `No coins matched exchange "${exchange}". Exchanges are matched by their full venue name, e.g. "Binance", "Coinbase Exchange", "OKX".` +
+        (closest.length ? ` Closest known: ${list(closest)}.` : ''),
+    );
+  }
+  // The names are right; nothing matched the other filters.
+  return done();
+}
+
 /** Register one typed tool. */
 function registerTyped(server, def) {
   const inputSchema = { ...def.inputSchema };
@@ -734,8 +820,14 @@ function registerTyped(server, def) {
     },
     async (args = {}) => {
       try {
-        const { route, query } = def.build(args);
-        const env = await apiGet(route, query || {});
+        let env;
+        let summary;
+        if (def.run) {
+          ({ env, summary } = await def.run(args, apiGet));
+        } else {
+          const { route, query } = def.build(args);
+          env = await apiGet(route, query || {});
+        }
         let data = unwrap(env);
         if (def.listFilters) {
           // Apply the caller's filters, but default-cap when they didn't set `top`.
@@ -743,6 +835,7 @@ function registerTyped(server, def) {
           data = applyFilters(data, { ...args, top });
         }
         return result(data, {
+          summary,
           meta: env?.meta,
         });
       } catch (err) {
