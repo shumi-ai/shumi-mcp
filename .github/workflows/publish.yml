@@ -178,6 +178,15 @@ jobs:
         run: ./mcp-publisher publish
 
       - name: Summary
+        env:
+          ON_NPM: ${{ needs.check.outputs.on-npm }}
+          ON_REGISTRY: ${{ needs.check.outputs.on-registry }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
-          echo "Published \`$(jq -r .name package.json)@${{ needs.check.outputs.version }}\` to npm and \`$(jq -r .name server.json)\` to the MCP Registry." >> "$GITHUB_STEP_SUMMARY"
+          PKG="$(jq -r .name package.json)@$VERSION"
+          SRV="$(jq -r .name server.json)@$VERSION"
+          if [ "$ON_NPM" = true ]; then echo "\`$PKG\` was already on npm (skipped)." >> "$GITHUB_STEP_SUMMARY"
+          else echo "Published \`$PKG\` to npm." >> "$GITHUB_STEP_SUMMARY"; fi
+          if [ "$ON_REGISTRY" = true ]; then echo "\`$SRV\` was already on the MCP Registry (skipped)." >> "$GITHUB_STEP_SUMMARY"
+          else echo "Published \`$SRV\` to the MCP Registry." >> "$GITHUB_STEP_SUMMARY"; fi
           echo "Smithery, Glama and MCPfinder aggregate from the registry within ~24h." >> "$GITHUB_STEP_SUMMARY"
