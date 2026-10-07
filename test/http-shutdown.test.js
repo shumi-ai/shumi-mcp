@@ -26,10 +26,22 @@ async function runServer({ crash }) {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  const exited = new Promise((r) => child.on('exit', (c, s) => r(c ?? s)));
   let stderr = '';
-  child.stderr.on('data', (d) => { stderr += d; });
-  setTimeout(() => child.kill('SIGTERM'), 700);
-  const code = await new Promise((r) => child.on('exit', (c, s) => r(c ?? s)));
+  // Signal only once the server is listening: its SIGTERM handler is registered
+  // by then. A fixed delay races slow CI runners and hits Node's default kill.
+  const ready = new Promise((resolve) => {
+    child.stderr.on('data', (d) => {
+      stderr += d;
+      if (stderr.includes('stateless MCP server on')) resolve();
+    });
+  });
+  // Never hang the suite: SIGKILL after 10s whatever happens.
+  const guard = setTimeout(() => child.kill('SIGKILL'), 10_000);
+  await Promise.race([ready, exited]);
+  child.kill('SIGTERM');
+  const code = await exited;
+  clearTimeout(guard);
   sink.close();
   return { code, stderr };
 }
