@@ -77,3 +77,40 @@ test('a first-contact request without clientInfo still reports, with blanks', ()
   assert.equal(props.client_name, undefined);
   assert.equal(props.server_version, '0.1.3');
 });
+
+// --- error-tracking contract (epic posthog-error-tracking) -------------------
+
+test('before_send fills the contract on autocaptured exceptions', async () => {
+  const { withErrorContract } = await import('../src/telemetry.js');
+  const ev = withErrorContract({
+    event: '$exception',
+    properties: { $exception_list: [{ type: 'Error', mechanism: { type: 'onuncaughtexception', handled: false } }] },
+  });
+  assert.equal(ev.properties.surface, 'mcp');
+  assert.equal(ev.properties.severity, 'error');
+  assert.ok(['production', 'development', 'preview'].includes(ev.properties.release_stage));
+  assert.equal(typeof ev.properties.app_version, 'string');
+  assert.equal(ev.properties.handled, false);
+});
+
+test('before_send keeps explicit captureError values and ignores other events', async () => {
+  const { withErrorContract } = await import('../src/telemetry.js');
+  const ev = withErrorContract({
+    event: '$exception',
+    properties: { severity: 'warning', handled: true, tool_name: 'x', $exception_list: [{ mechanism: { handled: true } }] },
+  });
+  assert.equal(ev.properties.severity, 'warning');
+  assert.equal(ev.properties.handled, true);
+  assert.equal(ev.properties.tool_name, 'x');
+  const other = { event: 'mcp.tool_called', properties: { a: 1 } };
+  assert.deepEqual(withErrorContract(other), { event: 'mcp.tool_called', properties: { a: 1 } });
+  assert.doesNotThrow(() => withErrorContract(null));
+});
+
+test('release stage: Render prod / Render preview / npm install / checkout', async () => {
+  const { resolveReleaseStage } = await import('../src/telemetry.js');
+  assert.equal(resolveReleaseStage({ RENDER: 'true' }), 'production');
+  assert.equal(resolveReleaseStage({ RENDER: 'true', IS_PULL_REQUEST: 'true' }), 'preview');
+  assert.equal(resolveReleaseStage({}, 'file:///Users/x/.npm/_npx/abc/node_modules/shumi-mcp/src/telemetry.js'), 'production');
+  assert.equal(resolveReleaseStage({}, 'file:///Users/x/code/shumi-mcp/src/telemetry.js'), 'development');
+});
