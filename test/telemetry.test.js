@@ -149,3 +149,28 @@ test('an uncaught exception still terminates the process with exit 1', async () 
   assert.equal(res.status, 1, res.stderr);
   assert.match(res.stderr, /child exception/);
 });
+
+test('a crash reaches stderr and sets exit code 1 before the PostHog flush', async () => {
+  // A PostHog host that accepts and never answers: the flush hangs for its full
+  // bound. The child is killed mid-flush, so anything written only after the
+  // flush would be missing. The error and the exit code must not depend on it.
+  const { spawnSync } = await import('node:child_process');
+  const telemetryUrl = new URL('../src/telemetry.js', import.meta.url).href;
+  const code = [
+    `const net = await import('node:net');`,
+    `const srv = net.createServer(() => {}).listen(0, '127.0.0.1');`,
+    `await new Promise((r) => srv.once('listening', r));`,
+    `process.env.POSTHOG_HOST = 'http://127.0.0.1:' + srv.address().port;`,
+    `const t = await import(${JSON.stringify(telemetryUrl)});`,
+    `t.initTelemetry('http');`,
+    `if (!t.isEnabled()) { console.error('telemetry not enabled'); process.exit(7); }`,
+    `process.on('exit', (c) => process.stderr.write('exitCode=' + process.exitCode + '\\n'));`,
+    `setTimeout(() => { throw new Error('flush-hang exception'); }, 0);`,
+  ].join('\n');
+  const res = spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+    env: { ...process.env, SHUMI_TELEMETRY: '1', POSTHOG_API_KEY: 'phc_test' },
+    encoding: 'utf8',
+    timeout: 1_000,
+  });
+  assert.match(res.stderr, /flush-hang exception/);
+});
