@@ -36,6 +36,7 @@ primeFreeTier(); // fire-and-forget; the hint drops its numbers until it lands
 
 const PORT = Number(process.env.PORT || 8787);
 const MCP_PATH = process.env.SHUMI_MCP_PATH || '/mcp';
+const DOCS_URL = 'https://docs.shumi.ai/agents/mcp';
 // Lock down in production by listing allowed browser origins (comma-separated).
 // Empty = permissive (non-browser MCP clients send no Origin).
 const ALLOWED_ORIGINS = (process.env.SHUMI_MCP_ALLOWED_ORIGINS || '')
@@ -124,6 +125,14 @@ const server = http.createServer(async (req, res) => {
   // RFC 9728 Protected Resource Metadata — only advertised once an AS is set.
   if (AUTH_SERVER && url.pathname === '/.well-known/oauth-protected-resource') {
     return writeJson(res, 200, protectedResourceMetadata());
+  }
+
+  // MCP directories (brick.blue and others) link the bare host, so a browser or
+  // crawler landing on / gets the setup docs instead of a JSON-RPC 404. Only
+  // GET/HEAD: a client that POSTs to / is misconfigured and should see the error.
+  if (url.pathname === '/' && (req.method === 'GET' || req.method === 'HEAD')) {
+    res.writeHead(301, { Location: DOCS_URL });
+    return res.end();
   }
 
   if (url.pathname !== MCP_PATH) {
