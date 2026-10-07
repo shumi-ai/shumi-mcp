@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { PostHog } from 'posthog-node';
 import { getToken, getDeviceId, getWalletAddress } from './config.js';
 
@@ -30,6 +32,59 @@ let client = null;
 let enabled = false;
 let transportLabel = 'unknown';
 
+function readPackageVersion() {
+  try {
+    return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * Error-tracking contract (shared by every Shumi/Coinrotator service, epic
+ * posthog-error-tracking): `release_stage`. Hosted HTTP runs on Render
+ * (preview services set IS_PULL_REQUEST); stdio runs on the user's machine from
+ * an npm install (under node_modules) or from a git checkout in development.
+ */
+export function resolveReleaseStage(env = process.env, moduleUrl = import.meta.url) {
+  if (env.RENDER) return env.IS_PULL_REQUEST === 'true' ? 'preview' : 'production';
+  if (env.NODE_ENV === 'production') return 'production';
+  try {
+    const path = moduleUrl.startsWith('file:') ? fileURLToPath(moduleUrl) : moduleUrl;
+    return /[\\/]node_modules[\\/]/.test(path) ? 'production' : 'development';
+  } catch {
+    return 'production';
+  }
+}
+
+/** Contract `app_version`: the deployed commit on Render, else the package version. */
+const APP_VERSION = process.env.RENDER_GIT_COMMIT || readPackageVersion();
+
+/**
+ * posthog-node `before_send`: make every `$exception` carry the contract, the
+ * autocaptured ones too (those arrive with no properties of ours and
+ * mechanism.handled=false). Explicit values from captureError() win.
+ */
+export function withErrorContract(event) {
+  try {
+    if (!event || event.event !== '$exception') return event;
+    const props = event.properties || {};
+    const mechanismHandled = props.$exception_list?.[0]?.mechanism?.handled;
+    event.properties = {
+      surface: 'mcp',
+      transport: transportLabel,
+      severity: 'error',
+      release_stage: resolveReleaseStage(),
+      app_version: APP_VERSION,
+      ...props,
+      handled: typeof props.handled === 'boolean' ? props.handled : mechanismHandled !== false,
+    };
+  } catch {
+    /* never throw from telemetry */
+  }
+  return event;
+}
+
 export function initTelemetry(transport = 'unknown') {
   transportLabel = transport;
   const optOut = /^(0|false|off|no)$/i.test(process.env.SHUMI_TELEMETRY || '');
@@ -45,8 +100,17 @@ export function initTelemetry(transport = 'unknown') {
     // a signal we get to handle — so send each event immediately instead of
     // batching, or a short session's events die in the queue.
     const flushAt = transport === 'stdio' ? 1 : 20;
-    client = new PostHog(key, { host, flushAt, flushInterval: 10_000 });
+    client = new PostHog(key, {
+      host,
+      flushAt,
+      flushInterval: 10_000,
+      // posthog-node autocapture stays OFF: its unhandledRejection listener
+      // would stop Node from crashing. installCrashHandlers() reports crashes
+      // and then exits exactly as Node would have.
+      before_send: withErrorContract,
+    });
     enabled = true;
+    installCrashHandlers();
   } catch {
     enabled = false;
   }
@@ -143,13 +207,62 @@ export function capture(event, properties = {}) {
   }
 }
 
-export function captureError(error, properties = {}) {
+export function captureError(error, properties = {}, { handled = true, severity = 'error' } = {}) {
   if (!enabled || !client) return;
   try {
-    client.captureException(error, distinctId(), { surface: 'mcp', transport: transportLabel, ...properties });
+    client.captureException(error, distinctId(), {
+      ...properties,
+      surface: 'mcp',
+      transport: transportLabel,
+      severity,
+      release_stage: resolveReleaseStage(),
+      app_version: APP_VERSION,
+      handled,
+    });
   } catch {
     /* never throw from telemetry */
   }
+}
+
+const CRASH_FLUSH_MS = 2000;
+let crashHandlersInstalled = false;
+
+/**
+ * Report a crash to PostHog (handled:false), flush for at most CRASH_FLUSH_MS,
+ * then die the way Node does by default: the error on stderr and exit code 1,
+ * for uncaught exceptions and unhandled rejections alike (Node's default
+ * --unhandled-rejections=throw mode). Fail-fast is preserved; reporting can
+ * only add up to 2s before the exit. Never writes to stdout (stdio protocol).
+ */
+async function reportCrashAndExit(err) {
+  try {
+    captureError(err, {}, { handled: false });
+    if (client) {
+      await Promise.race([
+        client.shutdown(CRASH_FLUSH_MS).catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, CRASH_FLUSH_MS).unref()),
+      ]);
+    }
+  } catch {
+    /* never let reporting stop the exit */
+  }
+  process.stderr.write(`${err?.stack || err}\n`);
+  process.exit(1);
+}
+
+function installCrashHandlers() {
+  if (crashHandlersInstalled) return;
+  crashHandlersInstalled = true;
+  let crashing = false;
+  const onCrash = (err) => {
+    if (crashing) return; // a second fault during the flush must not re-enter
+    crashing = true;
+    reportCrashAndExit(err);
+  };
+  process.on('uncaughtException', onCrash);
+  process.on('unhandledRejection', (reason) =>
+    onCrash(reason instanceof Error ? reason : new Error(`Unhandled rejection: ${String(reason)}`)),
+  );
 }
 
 /**
@@ -178,7 +291,8 @@ export function instrumentToolCalls(server) {
         return res;
       } catch (err) {
         capture('mcp.tool_called', { tool_name: name, status: 'error', is_error: true, duration_ms: Date.now() - start });
-        captureError(err, { tool_name: name });
+        // The SDK turns a thrown tool error into an MCP error response: handled.
+        captureError(err, { tool_name: name }, { handled: true });
         throw err;
       }
     };

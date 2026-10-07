@@ -77,3 +77,75 @@ test('a first-contact request without clientInfo still reports, with blanks', ()
   assert.equal(props.client_name, undefined);
   assert.equal(props.server_version, '0.1.3');
 });
+
+// --- error-tracking contract (epic posthog-error-tracking) -------------------
+
+test('before_send fills the contract on autocaptured exceptions', async () => {
+  const { withErrorContract } = await import('../src/telemetry.js');
+  const ev = withErrorContract({
+    event: '$exception',
+    properties: { $exception_list: [{ type: 'Error', mechanism: { type: 'onuncaughtexception', handled: false } }] },
+  });
+  assert.equal(ev.properties.surface, 'mcp');
+  assert.equal(ev.properties.severity, 'error');
+  assert.ok(['production', 'development', 'preview'].includes(ev.properties.release_stage));
+  assert.equal(typeof ev.properties.app_version, 'string');
+  assert.equal(ev.properties.handled, false);
+});
+
+test('before_send keeps explicit captureError values and ignores other events', async () => {
+  const { withErrorContract } = await import('../src/telemetry.js');
+  const ev = withErrorContract({
+    event: '$exception',
+    properties: { severity: 'warning', handled: true, tool_name: 'x', $exception_list: [{ mechanism: { handled: true } }] },
+  });
+  assert.equal(ev.properties.severity, 'warning');
+  assert.equal(ev.properties.handled, true);
+  assert.equal(ev.properties.tool_name, 'x');
+  const other = { event: 'mcp.tool_called', properties: { a: 1 } };
+  assert.deepEqual(withErrorContract(other), { event: 'mcp.tool_called', properties: { a: 1 } });
+  assert.doesNotThrow(() => withErrorContract(null));
+});
+
+test('release stage: Render prod / Render preview / npm install / checkout', async () => {
+  const { resolveReleaseStage } = await import('../src/telemetry.js');
+  assert.equal(resolveReleaseStage({ RENDER: 'true' }), 'production');
+  assert.equal(resolveReleaseStage({ RENDER: 'true', IS_PULL_REQUEST: 'true' }), 'preview');
+  assert.equal(resolveReleaseStage({}, 'file:///Users/x/.npm/_npx/abc/node_modules/shumi-mcp/src/telemetry.js'), 'production');
+  assert.equal(resolveReleaseStage({}, 'file:///Users/x/code/shumi-mcp/src/telemetry.js'), 'development');
+});
+
+// --- crash behaviour is unchanged with telemetry on ---------------------------
+// Node's default kills the process on an unhandled rejection / uncaught
+// exception. Reporting to PostHog must not change that (fail-fast). The child
+// has telemetry ON, pointed at a closed local port so nothing leaves the box.
+
+async function runCrashChild(crash) {
+  const { spawnSync } = await import('node:child_process');
+  const telemetryUrl = new URL('../src/telemetry.js', import.meta.url).href;
+  const code = [
+    `const t = await import(${JSON.stringify(telemetryUrl)});`,
+    `t.initTelemetry('http');`,
+    `if (!t.isEnabled()) { console.error('telemetry not enabled'); process.exit(7); }`,
+    crash,
+    `setTimeout(() => process.exit(0), 10000);`, // reaching this = crash swallowed
+  ].join('\n');
+  return spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+    env: { ...process.env, SHUMI_TELEMETRY: '1', POSTHOG_API_KEY: 'phc_test', POSTHOG_HOST: 'http://127.0.0.1:9' },
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+}
+
+test('an unhandled rejection still terminates the process non-zero', async () => {
+  const res = await runCrashChild(`Promise.reject(new Error('child rejection'));`);
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /child rejection/);
+  assert.equal(res.stdout, '');
+});
+
+test('an uncaught exception still terminates the process with exit 1', async () => {
+  const res = await runCrashChild(`setTimeout(() => { throw new Error('child exception'); }, 0);`);
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /child exception/);
+});
