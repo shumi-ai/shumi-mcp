@@ -235,18 +235,21 @@ let crashHandlersInstalled = false;
  * only add up to 2s before the exit. Never writes to stdout (stdio protocol).
  */
 async function reportCrashAndExit(err) {
+  // Fail-fast first: the exit code and the stderr line must not depend on the
+  // flush. If the flush hangs and the loop drains, Node still exits 1.
+  process.exitCode = 1;
+  process.stderr.write(`${err?.stack || err}\n`);
   try {
     captureError(err, {}, { handled: false });
     if (client) {
       await Promise.race([
         client.shutdown(CRASH_FLUSH_MS).catch(() => {}),
-        new Promise((resolve) => setTimeout(resolve, CRASH_FLUSH_MS).unref()),
+        new Promise((resolve) => setTimeout(resolve, CRASH_FLUSH_MS)),
       ]);
     }
   } catch {
     /* never let reporting stop the exit */
   }
-  process.stderr.write(`${err?.stack || err}\n`);
   process.exit(1);
 }
 
