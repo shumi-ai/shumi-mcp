@@ -104,12 +104,13 @@ export function initTelemetry(transport = 'unknown') {
       host,
       flushAt,
       flushInterval: 10_000,
-      // Unhandled exceptions / rejections → $exception (handled:false). Nothing
-      // else in this process reports crashes, so this cannot double-count.
-      enableExceptionAutocapture: true,
+      // posthog-node autocapture stays OFF: its unhandledRejection listener
+      // would stop Node from crashing. installCrashHandlers() reports crashes
+      // and then exits exactly as Node would have.
       before_send: withErrorContract,
     });
     enabled = true;
+    installCrashHandlers();
   } catch {
     enabled = false;
   }
@@ -221,6 +222,47 @@ export function captureError(error, properties = {}, { handled = true, severity 
   } catch {
     /* never throw from telemetry */
   }
+}
+
+const CRASH_FLUSH_MS = 2000;
+let crashHandlersInstalled = false;
+
+/**
+ * Report a crash to PostHog (handled:false), flush for at most CRASH_FLUSH_MS,
+ * then die the way Node does by default: the error on stderr and exit code 1,
+ * for uncaught exceptions and unhandled rejections alike (Node's default
+ * --unhandled-rejections=throw mode). Fail-fast is preserved; reporting can
+ * only add up to 2s before the exit. Never writes to stdout (stdio protocol).
+ */
+async function reportCrashAndExit(err) {
+  try {
+    captureError(err, {}, { handled: false });
+    if (client) {
+      await Promise.race([
+        client.shutdown(CRASH_FLUSH_MS).catch(() => {}),
+        new Promise((resolve) => setTimeout(resolve, CRASH_FLUSH_MS).unref()),
+      ]);
+    }
+  } catch {
+    /* never let reporting stop the exit */
+  }
+  process.stderr.write(`${err?.stack || err}\n`);
+  process.exit(1);
+}
+
+function installCrashHandlers() {
+  if (crashHandlersInstalled) return;
+  crashHandlersInstalled = true;
+  let crashing = false;
+  const onCrash = (err) => {
+    if (crashing) return; // a second fault during the flush must not re-enter
+    crashing = true;
+    reportCrashAndExit(err);
+  };
+  process.on('uncaughtException', onCrash);
+  process.on('unhandledRejection', (reason) =>
+    onCrash(reason instanceof Error ? reason : new Error(`Unhandled rejection: ${String(reason)}`)),
+  );
 }
 
 /**

@@ -114,3 +114,38 @@ test('release stage: Render prod / Render preview / npm install / checkout', asy
   assert.equal(resolveReleaseStage({}, 'file:///Users/x/.npm/_npx/abc/node_modules/shumi-mcp/src/telemetry.js'), 'production');
   assert.equal(resolveReleaseStage({}, 'file:///Users/x/code/shumi-mcp/src/telemetry.js'), 'development');
 });
+
+// --- crash behaviour is unchanged with telemetry on ---------------------------
+// Node's default kills the process on an unhandled rejection / uncaught
+// exception. Reporting to PostHog must not change that (fail-fast). The child
+// has telemetry ON, pointed at a closed local port so nothing leaves the box.
+
+async function runCrashChild(crash) {
+  const { spawnSync } = await import('node:child_process');
+  const telemetryUrl = new URL('../src/telemetry.js', import.meta.url).href;
+  const code = [
+    `const t = await import(${JSON.stringify(telemetryUrl)});`,
+    `t.initTelemetry('http');`,
+    `if (!t.isEnabled()) { console.error('telemetry not enabled'); process.exit(7); }`,
+    crash,
+    `setTimeout(() => process.exit(0), 10000);`, // reaching this = crash swallowed
+  ].join('\n');
+  return spawnSync(process.execPath, ['--input-type=module', '-e', code], {
+    env: { ...process.env, SHUMI_TELEMETRY: '1', POSTHOG_API_KEY: 'phc_test', POSTHOG_HOST: 'http://127.0.0.1:9' },
+    encoding: 'utf8',
+    timeout: 15_000,
+  });
+}
+
+test('an unhandled rejection still terminates the process non-zero', async () => {
+  const res = await runCrashChild(`Promise.reject(new Error('child rejection'));`);
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /child rejection/);
+  assert.equal(res.stdout, '');
+});
+
+test('an uncaught exception still terminates the process with exit 1', async () => {
+  const res = await runCrashChild(`setTimeout(() => { throw new Error('child exception'); }, 0);`);
+  assert.equal(res.status, 1, res.stderr);
+  assert.match(res.stderr, /child exception/);
+});
