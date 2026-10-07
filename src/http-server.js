@@ -175,6 +175,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
     server.close();
     await mcpHandler.close();
     await shutdownTelemetry();
-    process.exit(0);
+    // A crash handler may already be flushing with exitCode 1; keep it.
+    process.exit(process.exitCode ?? 0);
   });
 }
