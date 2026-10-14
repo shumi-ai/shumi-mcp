@@ -61,7 +61,7 @@ test('modern era answers tools/list with no initialize and no session', async ()
   const res = await handler.fetch(modernRequest(1, 'tools/list'));
   assert.equal(res.status, 200);
   const { result } = await body(res);
-  assert.equal(result.tools.length, 31);
+  assert.equal(result.tools.length, 33);
   assert.ok(result.tools.every((t) => t.inputSchema?.type === 'object'));
 });
 

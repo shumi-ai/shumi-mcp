@@ -428,6 +428,35 @@ export const TYPED_TOOLS = [
     },
   },
   {
+    name: 'get_unlocks',
+    title: 'Token unlock schedule',
+    description:
+      'Scheduled token unlocks for ONE coin: the next unlock (date, days until, tokens, USD value, % of market cap, recipients such as team/investors/ecosystem, cliff or monthly tranche), what releases over 30 and 90 days, % unlocked and locked, the final unlock date, the last unlock, and how price moved in the 7 days before and after its last 3-6 unlocks (history, not a forecast). Sources: DropsTab cross-checked with DefiLlama, each figure with its source link and fetch time; `state` says `upcoming`, `fully_unlocked`, `no_unlock_data` or `not_covered` (then `publishedSchedule` may carry the project\'s own vesting terms). Answers "when is ARB\'s next unlock?", "who gets the OP unlock?", "how did SUI trade around its unlocks?".',
+    inputSchema: {
+      symbol: z.string().min(1).max(20).describe('Coin ticker, e.g. ARB.'),
+      coinId: z.string().optional().describe('Coin id (e.g. "arbitrum") when a previous result gave it; wins over the ticker when several coins share it.'),
+    },
+    build: ({ symbol, coinId }) => ({ route: `unlocks/${encodeURIComponent(symbol)}`, query: { coinId } }),
+  },
+  {
+    name: 'get_unlock_calendar',
+    title: 'Unlock calendar (market-wide)',
+    description:
+      'Upcoming token unlocks ACROSS THE MARKET when no single coin is named: each row has date, days until, coin, tokens, USD value, % of market cap, recipients and insider (team + investor) share, with its source. Defaults: next 7 days, top 500 coins, at least 0.5 % of market cap, ranked by % of market cap. Only coins DropsTab tracks; each recipient\'s next release only. Answers "biggest unlocks this week?", "big VC unlocks this month?". For one coin use get_unlocks.',
+    inputSchema: {
+      days: z.number().int().min(1).max(30).optional().describe('Window in days from today (default 7).'),
+      maxRank: z.number().int().min(10).max(5000).optional().describe('Only coins up to this market-cap rank (default 500).'),
+      minPct: z.number().min(0.5).max(100).optional().describe('Minimum size in % of market cap (default and floor 0.5).'),
+      sort: z.enum(['pct', 'usd', 'date']).optional().describe('pct = biggest share of market cap (default), usd = biggest dollar value, date = soonest.'),
+      limit: z.number().int().min(1).max(50).optional().describe('Rows to return (default 15).'),
+      insidersOnly: z.boolean().optional().describe('Only unlocks with a team or investor leg.'),
+    },
+    build: ({ days, maxRank, minPct, sort, limit, insidersOnly }) => ({
+      route: 'unlocks/calendar',
+      query: { days, maxRank, minPct, sort, limit, insidersOnly },
+    }),
+  },
+  {
     name: 'get_holders',
     title: 'Token holder tracking',
     description:

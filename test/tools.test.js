@@ -149,6 +149,15 @@ test('list_rwa_assets passes class and dex filters through to the server', () =>
   });
 });
 
+test('unlock tools map to the CLI unlock routes', () => {
+  assert.deepEqual(byName('get_unlocks').build({ symbol: 'ARB' }), { route: 'unlocks/ARB', query: { coinId: undefined } });
+  assert.deepEqual(byName('get_unlocks').build({ symbol: 'ARB', coinId: 'arbitrum' }), { route: 'unlocks/ARB', query: { coinId: 'arbitrum' } });
+  assert.deepEqual(byName('get_unlock_calendar').build({ days: 14, sort: 'usd' }), {
+    route: 'unlocks/calendar',
+    query: { days: 14, maxRank: undefined, minPct: undefined, sort: 'usd', limit: undefined, insidersOnly: undefined },
+  });
+});
+
 test('movement/history views require their identifier', () => {
   assert.throws(() => byName('get_holders').build({ view: 'movements' }), /contract is required/);
   assert.throws(() => byName('get_wallets').build({ view: 'movements' }), /address is required/);

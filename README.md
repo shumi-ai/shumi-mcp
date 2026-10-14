@@ -55,7 +55,7 @@ be passed through verbatim and fail as an invalid key.
 `get_prices`, `scan_trends`, `scan_coins`, `get_market_sentiment`, `list_narratives`,
 `get_narrative`, `list_categories`, `get_category`, `get_funding_momentum`, `get_funding_alerts`,
 `get_regime`, `get_signal`, `get_signal_quality`, `get_pair_suggestions`, `list_rwa_assets`,
-`get_rwa_asset`, `get_holders`, `get_wallets`, `get_futures_signals`, `get_basket`,
+`get_rwa_asset`, `get_unlocks`, `get_unlock_calendar`, `get_holders`, `get_wallets`, `get_futures_signals`, `get_basket`,
 `get_transcripts`.
 
 **Real-world assets** (`list_rwa_assets`, `get_rwa_asset`) cover stocks, ETFs, commodities,
