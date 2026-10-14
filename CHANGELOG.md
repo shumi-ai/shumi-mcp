@@ -4,6 +4,14 @@ All notable changes to `@shumi-ai/mcp` are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-10-14
+
+### Added
+- **`get_unlocks`**: one coin's scheduled token unlocks. Gives the next unlock with its date, size, % of market cap and recipients, plus the 30- and 90-day releases and how much is still locked. It also gives the price move around the coin's last unlocks, as history, not a forecast. DropsTab cross-checked with DefiLlama, each figure sourced.
+- **`get_unlock_calendar`**: upcoming unlocks across the market ("biggest unlocks this week?"). Defaults: the next 7 days, the top 500 coins, ranked by % of market cap.
+
+Both call the CLI surface (`/api/cli/unlocks/:symbol`, `/api/cli/unlocks/calendar`; coinrotator-ai#542) at the standard typed price.
+
 ## [1.1.0] - 2026-08-19
 
 Everything here was found by calling the hosted server as a user would and
